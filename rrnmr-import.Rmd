@@ -345,39 +345,3 @@ saveRDS(list("crosssectional" = dset.crosssectional,
         file = sprintf("rds/dset-%s.rds", now))
 ```
 
-```{r debug, eval = FALSE, include = FALSE}
-temp <- c("nmrdata/FR-NMR/nmr_fr97.sas7bdat",
-          "nmrdata/FR-NMR/nmr_fr02.sas7bdat",
-          "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
-          "nmrdata/FR-NMR/nmr_fr12.sas7bdat",
-          "nmrdata/T20xx/T2000-nmr.sas7bdat",
-          "nmrdata/T20xx/T2011-nmr.sas7bdat",
-          "nmrdata/FR-NMR/nmr_dilgom14.sas7bdat",
-          "nmrdata/FR-NMR/nmr_ft17.sas7bdat") %>%
-    purrr::map(my_read_nmr)
-
-lapply(temp, function(x) x %>%
-                         colnames %>%
-                         mygrep(word = "NMR") %>%
-                         sort) 
-
-lapply(temp, function(x) x %>%
-                         colnames %>%
-                         mygrep(word = "NMR") %>%
-                         length)
-
-temp[[1]] %>% colnames %>% mygrep(word = "NMR") %>% mygrep(word = "pct", complement = TRUE)
-
-lapply(temp, function(x) x %>%
-                         select(-contains("pct")) %>%
-                         colnames %>%
-                         mygrep(word = "NMR") %>%
-                         length)
-
-
-lapply(temp, function(x) x %>%
-                         select(-one_of(exclude.metabolites)) %>%
-                         colnames %>%
-                         mygrep(word = "NMR") %>%
-                         length)
-```
