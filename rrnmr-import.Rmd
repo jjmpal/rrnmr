@@ -1,0 +1,383 @@
+---
+title: "NMR metabolites and hypertension: Data handling"
+author: "Joonatan Palmu"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+---
+
+```{r options, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, cache = FALSE, results='asis', warning=FALSE)
+now <- format(Sys.time(), '%Y%m%d-%H%M%S')
+```
+
+# Libraries
+
+<details>
+  <summary>Libraries</summary>
+
+```{r libraries, results = 'hide'}
+library(magrittr)
+library(tibble)
+library(readr)
+library(knitr)
+library(kableExtra)
+library(tidyr)
+library(broom)
+library(dplyr)
+library(parallel)
+library(officer)
+library(flextable)
+library(ggplot2)
+library(randomForest)
+library(Boruta)
+library(pander)
+library(caret)
+library(pROC)
+library(lme4)
+library(broom.mixed)
+library(lmerTest)
+library(haven)
+library(readxl)
+library(openxlsx)
+library(ggpubr)
+library(purrr)
+library(ggforestplot)
+library(xfun)
+```
+
+</details>
+
+## Functions
+
+<details><summary>Functions</summary>
+
+```{r Functions}
+sourcefiles <- c("articles-functions.R",
+                 "articles-plots.R",
+                 "articles-importer.R",
+                 "articles-definitions.R",
+                 "articles-tables.R")
+```
+
+```{r import files, echo = FALSE}
+for (f in sourcefiles) {
+    source(f)
+}
+```
+
+```{r embbed files, echo = FALSE}
+xfun::embed_files(c("rrnmr-import.Rmd", sourcefiles))
+```
+
+</details>
+
+
+# Variable definitions
+
+Included variables
+
+```{r names}
+vars <- c("age", "bmi", "bptreat", "cohort", "diabetes", "dias",
+          "female", "htn", "htn3", "koltreat", "leisure", "sampleid",
+          "smoker", "sys")
+```
+
+Excluded metabolites
+
+```{r Metabolites}
+exclude.metabolites <- excludemetabolites(bygroup = c("Lipoprotein subclasses",
+                                                      "Relative lipoprotein lipid concentrations"),
+                                          byname = c("Glycerol", "Gln"),
+                                          byexpression = ".*pct")
+```
+
+<details>
+  <summary>List of excluded metabolites</summary>
+
+```{r excluded metabolites list, echo = FALSE}
+data.frame(metabolite = exclude.metabolites) %>%
+    mutate(nmrname = bionames(metabolite)) %>%
+               mykable
+```
+
+</details>
+
+# Cross-sectional sample
+
+## Data import
+
+Reading phenotype data for *FINRISK 1997-2012*.
+
+```{r read sas data for FR/FT}
+dset.finrisk.pheno <- my_read_sas("nmrdata/fr2019_015_ft2019_016_nmr_10_23.sas7bdat") %>%
+    dplyr::select(-one_of(metabolitemapping(prefix = ""))) %>%
+    dplyr::filter(VUOSI != 1992, VUOSI != 2017)
+```
+
+Reading NMR-data for *FINRISK*.
+
+```{r Reading NMR-data for FR}
+dset.finrisk.nmr <- c("nmrdata/FR-NMR/nmr_fr97.sas7bdat",
+                      "nmrdata/FR-NMR/nmr_fr02.sas7bdat",
+                      "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+                      "nmrdata/FR-NMR/nmr_fr12.sas7bdat",
+                      "nmrdata/FR-NMR/nmr_ft17.sas7bdat") %>%
+    purrr::map(my_read_nmr) %>%
+    purrr::reduce(rbind) %>%
+    mutate(sampleid = sprintf("%s_%s", VUOSI, HAVTUN))  %>%
+    dplyr::filter(VUOSI != 1992, VUOSI != 2017) %>%
+    select(-one_of(exclude.metabolites))
+```
+
+Number of participants by NMR data
+
+```{r Number of participans by available NMR-data, echo = FALSE}
+dset.finrisk.nmr %>% group_by(VUOSI) %>% summarize(n = n()) %>% mykable
+```
+
+Reading phenotype and NMR data for *HEALTH 2000*.
+
+```{r Reading T2000}
+dset.t2000 <- HEALTH_definitions("nmrdata/T20xx/T2000-phenotype.sas7bdat",
+                                 "nmrdata/T20xx/T2000-phenotype-extra.sas7bdat",
+                                 "nmrdata/T20xx/T2000-nmr.sas7bdat",
+                                 vars,
+                                 cohort = "T2000") %>%
+    select(-SAMPLEID, -one_of(exclude.metabolites))
+```
+
+
+Joining *FINRISK* phenotype and NMR data, and biding *FINRISK* and *HEALTH 2000*.
+When participant has taken part in more than one *FINRISK* examination,
+we exclude all but the latest one.
+
+```{r crossectional missing values}
+dset.crosssectional.raw <- dset.finrisk.pheno %>%
+    remove_reexamined %>%
+    FR_definitions(variables = vars) %>%
+    inner_join(., dset.finrisk.nmr, by = "sampleid") %>%
+    bind_rows(., dset.t2000)
+```
+
+
+## Missing values
+
+Exploring number of missing values per cohort
+
+```{r cross sectional missing by cohort, results='asis', echo = FALSE}
+missingbycohort(dset.crosssectional.raw, vars) %>% mykable
+```
+
+<details>
+	<summary>Cross-sectional variable details</summary>
+	
+Missing phenotype data for cross-sectional sample
+
+```{r cross sectional meta table, echo = FALSE}
+dset.crosssectional.raw %>% select(vars) %>% mydescribe %>% mykable
+```
+
+Missing NMR data for cross-sectional sample
+
+```{r cross sectional nmr table, echo = FALSE}
+dset.crosssectional.raw %>% select(starts_with("NMR_")) %>% mydescribe %>% mykable
+```
+
+</details>
+
+## Finalizing data frame
+
+Excluding participants with missing values.
+
+```{r crossectional finalizing}
+dset.crosssectional <- dset.crosssectional.raw %>%
+    select(-HAVTUN, -VUOSI) %>%
+    drop_na %>%
+    mutate(cohort = as.factor(cohort)) %>%
+    nmr_normalization()
+```
+
+```{r crossectional characteristics, echo = FALSE}
+characteristicsTable(dset.crosssectional , strata = "cohort") %>% mykable
+```
+
+## Diagnostic plots
+
+Box plot for metadata
+
+```{r scatter plots for metadata, fig.width=8, fig.height=4, echo = FALSE}
+myboxplot(dset.crosssectional, vars = c("age", "bmi", "sys", "dias"), normalize = TRUE)
+```
+
+Box plot for metabolites
+
+```{r scatter plots for metabolites, fig.width=20, fig.height=4, echo = FALSE}
+myboxplot(dset.crosssectional,
+          vars = dset.crosssectional %>% colnames %>% mygrep(word = "NMR_"),
+          rename = TRUE)
+```
+
+# Longitudal sample
+
+## DILGOM
+
+*DILGOM* phenotype data is included in the columns of *FINRISK 2007* and can be parsed.
+
+```{r dilgom}
+dilgom.baseline <- FR_definitions(dset.finrisk.pheno %>% filter(VUOSI == 2007), variables = vars)
+dilgom.followup <- DILGOM_definitions(dset.finrisk.pheno %>% filter(VUOSI == 2007), variables = vars)
+```
+
+Reading NMR data for *DILGOM*. There are 
+`r my_read_sas( "nmrdata/FR-NMR/nmr_fr07.sas7bdat") %>% nrow`
+NMR rows for *FR07* and 
+`r my_read_sas( "nmrdata/FR-NMR/nmr_dilgom14.sas7bdat") %>% nrow`
+for *DILGOM*.
+
+```{r Reading NMR-data for DILGOM}
+dset.dilgom.nmr <- c("nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+                     "nmrdata/FR-NMR/nmr_dilgom14.sas7bdat") %>%
+    purrr::map(my_read_nmr) %>%
+    purrr::reduce(rbind) %>%
+    mutate(sampleid = sprintf("%s_%s", VUOSI, HAVTUN)) %>%
+    select(-one_of(exclude.metabolites))
+```
+
+Number of participants by NMR data
+
+```{r Number of participans by available NMR-data in DILGOM, echo = FALSE}
+dset.dilgom.nmr %>% group_by(VUOSI) %>% summarize(n = n()) %>% mykable
+```
+
+
+Joining phenotype and NMR-data
+
+```{r dilgom join pheno and nmr data}
+dset.dilgom <- rbind(dilgom.baseline %>% mutate(cohort = "F2007"),
+                     dilgom.followup %>% mutate(cohort = "F2014")) %>%
+    inner_join(., dset.dilgom.nmr, by = "sampleid") %>%
+    select(-VUOSI, -HAVTUN) %>%
+    mutate(sampleid = gsub("^2007_", "2014_", sampleid))
+```
+
+
+## Missing values in DILGOM
+
+```{r dilgom missing by cohort, echo = FALSE}
+missingbycohort(dset.dilgom, vars) %>% mykable
+```
+
+
+## HEALTH
+
+Reading phenotype and NMR data for *HEALTH 2011* cohort. Number of
+follow-up pairs found between samples.  SAS object for NMR data in
+T2000 has `r read_sas("nmrdata/T20xx/T2000-nmr.sas7bdat") %>% nrow`
+and in T2011 `r read_sas("nmrdata/T20xx/T2011-nmr.sas7bdat") %>% nrow`
+rows.
+
+```{r read sas data for T2011}
+dset.t2011 <- HEALTH_definitions("nmrdata/T20xx/T2011-phenotype.sas7bdat",
+                                 "nmrdata/T20xx/T2011-phenotype-extra.sas7bdat",
+                                 "nmrdata/T20xx/T2011-nmr.sas7bdat",
+                                 vars,
+                                 cohort = "T2011") %>%
+    select(-one_of(exclude.metabolites))
+```
+
+```{r health missing by cohort, echo = FALSE}
+missingbycohort(rbind(dset.t2000, dset.t2011), vars) %>% mykable
+```
+
+## Combining *DILGOM* and *HEALTH*
+
+Binding DILGOM and HEALTH studies.
+
+```{r dilgom cleaned}
+dset.longitudinal.raw <- rbind(dset.dilgom,
+                               dset.t2000,
+                               dset.t2011)
+```
+
+Number of participants takin part in both baseline and followup.
+
+```{r number of pairs between HEALTH samples, echo = FALSE}
+followup.pairs(dset.longitudinal.raw) %>% mykable
+```
+
+
+## Finalizing data frame
+
+Excluding participants with missing values and those with missing baseline-followup data.
+
+```{r longitudinal finalizing}
+dset.longitudinal <- dset.longitudinal.raw %>%
+    drop_na() %>%
+    nmr_normalization() %>%
+    cleanlongitudinal()
+```
+
+```{r longitudinal characteristics, echo = FALSE}
+characteristicsTable(dset.longitudinal , strata = "cohort") %>% mykable
+```
+
+## Diagnostic graphs
+
+Box plot for metadata
+
+```{r scatter plots for metadata longitudinal, fig.width=8, fig.height=4, echo = FALSE}
+myboxplot(dset.longitudinal, vars = c("age", "bmi", "sys", "dias"), normalize = TRUE)
+```
+
+Box plot for metabolites
+
+```{r scatter plots for metabolites longitudinal, fig.width=20, fig.height=4, echo = FALSE}
+myboxplot(dset.longitudinal, 
+          vars = dset.longitudinal %>% colnames %>% mygrep(word = "NMR_"),
+          rename = TRUE)
+```
+
+# Saving data frame for analyzes
+
+```{r save data}
+dir.create("rds", showWarnings = FALSE)
+saveRDS(list("crosssectional" = dset.crosssectional,
+             "longitudinal" = dset.longitudinal),
+        file = sprintf("rds/dset-%s.rds", now))
+```
+
+```{r debug, eval = FALSE, include = FALSE}
+temp <- c("nmrdata/FR-NMR/nmr_fr97.sas7bdat",
+          "nmrdata/FR-NMR/nmr_fr02.sas7bdat",
+          "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+          "nmrdata/FR-NMR/nmr_fr12.sas7bdat",
+          "nmrdata/T20xx/T2000-nmr.sas7bdat",
+          "nmrdata/T20xx/T2011-nmr.sas7bdat",
+          "nmrdata/FR-NMR/nmr_dilgom14.sas7bdat",
+          "nmrdata/FR-NMR/nmr_ft17.sas7bdat") %>%
+    purrr::map(my_read_nmr)
+
+lapply(temp, function(x) x %>%
+                         colnames %>%
+                         mygrep(word = "NMR") %>%
+                         sort) 
+
+lapply(temp, function(x) x %>%
+                         colnames %>%
+                         mygrep(word = "NMR") %>%
+                         length)
+
+temp[[1]] %>% colnames %>% mygrep(word = "NMR") %>% mygrep(word = "pct", complement = TRUE)
+
+lapply(temp, function(x) x %>%
+                         select(-contains("pct")) %>%
+                         colnames %>%
+                         mygrep(word = "NMR") %>%
+                         length)
+
+
+lapply(temp, function(x) x %>%
+                         select(-one_of(exclude.metabolites)) %>%
+                         colnames %>%
+                         mygrep(word = "NMR") %>%
+                         length)
+```
