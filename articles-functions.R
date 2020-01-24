@@ -18,15 +18,17 @@ mygrep <- function(..., word, ignorecase = TRUE, complement = FALSE) {
     c(...)[xor(grepl(word, c(...), ignore.case = ignorecase), (complement == TRUE))]
 }
 
-betacip <- function(df, exclude = c("estimate", "conf.low", "conf.high", "qval", "pval",
-                                    "statistic", "std.error")) {
-    dplyr::mutate(df,
-                  mean_ci = sprintf("%.2f (%.2f–%.2f)",
-                                    estimate,
-                                    conf.low,
-                                    conf.high),
-                  p.value = pub.p(qval)) %>%
-        dplyr::select(-one_of(exclude))
+betacip <- function(df,
+                    exclude = c("estimate", "conf.low", "conf.high", "qval", "pval", "statistic", "std.error"),
+                    percent = FALSE) {
+    dplyr::mutate(df, mean_ci = format.estimate_ci(estimate, conf.low, conf.high, percent)) %>%
+        { if ("qval" %in% colnames(df)) mutate(., p.value = pub.p(qval)) else . } %>%
+        dplyr::select(., colnames(.)[!colnames(.) %in% exclude])
+}
+
+format.estimate_ci <- function(estimate, conf.low, conf.high, percent = FALSE) {
+    if(percent) sprintf("%.1f%% (%.1f–%.1f%%)",  estimate*100, conf.low*100, conf.high*100)
+    else sprintf("%.2f (%.2f–%.2f)", estimate, conf.low, conf.high)
 }
 
 standardnames <- function(x, prefix = "NMR_") {
@@ -52,6 +54,17 @@ biogroups <- function(metabolites) {
             return(names$group[1])
         })
 }
+
+biodescription <- function(metabolites) {
+    md <- as.data.frame(ggforestplot::df_NG_biomarker_metadata) 
+    metabolites %>%
+        purrr::map_chr(function(id) {
+            id <- gsub("NMR_", "", id)
+            names <- md %>% filter(machine_readable_name == id)
+            return(names$description[1])
+        })
+}
+
 
 
 metanames <- function(x) {

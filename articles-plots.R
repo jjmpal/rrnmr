@@ -17,27 +17,18 @@ merge.metadata <- function(dset, select = c("nmrid", "nmrname", "nmrgroup"), ter
 
 bpscale <- function() {
  scale_colour_manual(name = "Blood pressure variables",
-                            labels = c("Systole",
-                                       "Diastole",
-                                       "Hypertension",
-                                       "Hypertension",
-                                       "Hypertension",
-                                       "Stage 1",
-                                       "Stage 2"),
-                            breaks = c("sys",
-                                     "dias",
-                                     "htn3",
-                                     "htn",
-                                     "htn.followup",
-                                     "htn3_stage1",
-                                     "htn3_stage2"),
+                            labels = c("sys" = "Systole",
+                                       "dias" = "Diastole",
+                                       "htn" = "Hypertension",
+                                       "htn.followup" = "Hypertension",
+                                       "young" = "Young",
+                                       "old" = "Old"),
                             values = c("sys" = "blue",
                                        "dias" = "red",
-                                       "htn3" = "black",
                                        "htn" = "black",
                                        "htn.followup" = "black",
-                                       "htn3_stage1" = "blue",
-                                       "htn3_stage2" = "red"))
+                                       "young" = "red",
+                                       "old" = "blue"))
 }
 
 cohortscale <- function() {
@@ -55,8 +46,12 @@ cohortscale <- function() {
                                    "2012" = "gray90"))
 }
  
-foresttheme <- function(g, colorscale = bpscale, omitlegend = FALSE) {
+foresttheme <- function(g, logodds = FALSE, colorscale = bpscale, omitlegend = FALSE) {
     g +
+        { if (logodds) 
+              scale_x_log10(breaks = scales::pretty_breaks(n = 4))
+          else
+              scale_x_continuous(breaks = scales::pretty_breaks(n = 3)) } +
         colorscale() +
         guides(colour = guide_legend(override.aes = list(size=4, shape = 19))) +
         ggplot2::theme(legend.position = c(-0.5, -2.5),
@@ -92,7 +87,7 @@ nestplot <- function(dset,
     nest(dset, -nmrgroup, .key = "data") %>%
         mutate(gg_groups = purrr::map2(data,
                                        nmrgroup,
-                                       ~ foresttheme(ggforestplot::forestplot(
+                                       ~ (ggforestplot::forestplot(
                                                           df = .x,
                                                           name = nmrname,
                                                           estimate = estimate,
@@ -103,9 +98,11 @@ nestplot <- function(dset,
                                                           psignif = 0.05,
                                                           colour = response,
                                                           xlim = xlim) +
-                                                     xlab(label),
-                                                     colorscale = colorscale,
-                                                     omitlegend = omitlegend)),
+                                          xlab(label)) %>%
+                                           foresttheme(.,
+                                                       logodds = logodds,
+                                                       colorscale = colorscale,
+                                                       omitlegend = omitlegend)),
                gg_groups = case_when(row_number() == second[length(second)] ~
                                          gg_groups,
                                      row_number() == first[length(first)] ~
@@ -279,4 +276,29 @@ pca.kde2d <- function(df, htn = 0, n = 500) {
     yrange <- pca.df$axes %>% pull(PC002) %>% range
     
     kde2d(x, y, n = n, lims = c(xrange, yrange))
+}
+
+mycorrplot <- function(dset, metabolites) {
+    corr <- spearmancorrelation(dset, metabolites)
+
+    ggcorrplot(corr = corr,
+               hc.order = TRUE,
+               type = "full",
+               insig = "blank",
+               pch = 4,
+               pch.col = "gray",
+               show.legend = TRUE) +
+        scale_fill_gradientn(name = "Spearman\ncorrelation",
+                             colors = c("blue", "white", "red"),
+                             breaks = c(-1, -0.5, 0, 0.5, 1),
+                             limits = c(-1.1, 1.1)) +
+    theme(panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.background = element_blank(),
+          axis.line = element_line(colour = "black"),
+          legend.title = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.key.width = unit(4, "mm"),
+          legend.key.height = unit(10, "mm"),
+          axis.text.x = element_text(angle = 90, hjust = 1))
 }

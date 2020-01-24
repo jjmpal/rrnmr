@@ -1,0 +1,87 @@
+---
+title: "NMR metabolites and hypertension: Unit tests"
+author: "Joonatan Palmu"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+---
+
+```{r options, include=FALSE}
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, message = FALSE, 
+	results='asis', cache=FALSE, warning=FALSE)
+options(knitr.kable.NA = "")
+```
+
+# Libraries
+
+<details>
+
+```{r libraries, results = 'hide'}
+library(magrittr)
+library(knitr)
+library(codetools)
+```
+
+</details>
+
+# Functions
+
+<details>
+  <summary>Open/Close</summary>
+
+Importer
+
+```{r Importing importer, code=readLines("articles-importer.R")}
+source("articles-importer.R")
+```
+
+Functions
+
+```{r Importing functions, code=readLines("articles-functions.R")}
+source("articles-functions.R")
+```
+
+Regularisation
+
+```{r Importing regularisation functions, code=readLines("articles-regularisation.R")}
+source("articles-regularisation.R")
+```
+
+Riskset
+
+```{r Importing riskset functions, code=readLines("articles-riskset.R")}
+source("articles-riskset.R")
+```
+
+Models
+
+```{r Importing models, code=readLines("articles-models.R")}
+source("articles-models.R")
+```
+
+Plots
+
+```{r Importing plots, code=readLines("articles-plots.R")}
+source("articles-plots.R")
+```
+
+Officer
+
+```{r Importing officer, code=readLines("articles-officer.R")}
+source("articles-officer.R")
+```
+
+</details>
+
+```{r loop functions globals}
+functions <- lsf.str() %>% as.vector
+lapply(c2l(functions), function(f) findGlobals(f, merge = FALSE)$variables) %>%
+    purrr::map_df(., ~as.data.frame(.x), .id = "function") %>%
+    kable
+
+c2l(koe)
+```
+
+
+```{r fix}
+functions <- lsf.str() %>% as.vector
+lapply(lsf.str(), function(f) environment(f) = parent.env(environment(c2l)))
+```

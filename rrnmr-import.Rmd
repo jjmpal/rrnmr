@@ -110,7 +110,7 @@ Reading phenotype data for *FINRISK 1997-2012*.
 ```{r read sas data for FR/FT}
 dset.finrisk.pheno <- my_read_sas("nmrdata/fr2019_015_ft2019_016_nmr_10_23.sas7bdat") %>%
     dplyr::select(-one_of(metabolitemapping(prefix = ""))) %>%
-    dplyr::filter(VUOSI != 1992, VUOSI != 2017)
+    dplyr::filter(VUOSI != 1992)
 ```
 
 Reading NMR-data for *FINRISK*.
@@ -124,14 +124,14 @@ dset.finrisk.nmr <- c("nmrdata/FR-NMR/nmr_fr97.sas7bdat",
     purrr::map(my_read_nmr) %>%
     purrr::reduce(rbind) %>%
     mutate(sampleid = sprintf("%s_%s", VUOSI, HAVTUN))  %>%
-    dplyr::filter(VUOSI != 1992, VUOSI != 2017) %>%
+    dplyr::filter(VUOSI != 1992) %>%
     select(-one_of(exclude.metabolites))
 ```
 
-Number of participants by NMR data
+Raw number of participants by NMR data
 
 ```{r Number of participans by available NMR-data, echo = FALSE}
-dset.finrisk.nmr %>% group_by(VUOSI) %>% summarize(n = n()) %>% mykable
+dset.finrisk.nmr %>% group_by(VUOSI) %>% dplyr::summarize(n = n()) %>% mykable
 ```
 
 Reading phenotype and NMR data for *HEALTH 2000*.
@@ -145,7 +145,6 @@ dset.t2000 <- HEALTH_definitions("nmrdata/T20xx/T2000-phenotype.sas7bdat",
     select(-SAMPLEID, -one_of(exclude.metabolites))
 ```
 
-
 Joining *FINRISK* phenotype and NMR data, and biding *FINRISK* and *HEALTH 2000*.
 When participant has taken part in more than one *FINRISK* examination,
 we exclude all but the latest one.
@@ -154,7 +153,7 @@ we exclude all but the latest one.
 dset.crosssectional.raw <- dset.finrisk.pheno %>%
     remove_reexamined %>%
     FR_definitions(variables = vars) %>%
-    inner_join(., dset.finrisk.nmr, by = "sampleid") %>%
+    full_join(., dset.finrisk.nmr, by = "sampleid") %>%
     bind_rows(., dset.t2000)
 ```
 
@@ -227,11 +226,9 @@ dilgom.baseline <- FR_definitions(dset.finrisk.pheno %>% filter(VUOSI == 2007), 
 dilgom.followup <- DILGOM_definitions(dset.finrisk.pheno %>% filter(VUOSI == 2007), variables = vars)
 ```
 
-Reading NMR data for *DILGOM*. There are 
-`r my_read_sas( "nmrdata/FR-NMR/nmr_fr07.sas7bdat") %>% nrow`
-NMR rows for *FR07* and 
-`r my_read_sas( "nmrdata/FR-NMR/nmr_dilgom14.sas7bdat") %>% nrow`
-for *DILGOM*.
+N:o FR07 participants with miggins DILGOM systole measurement
+`r dset.finrisk.pheno %>% filter(VUOSI == 2007) %>% pull(DLGM14_VP_OMRON1_SYS) %>% is.na %>% sum`.
+
 
 ```{r Reading NMR-data for DILGOM}
 dset.dilgom.nmr <- c("nmrdata/FR-NMR/nmr_fr07.sas7bdat",
@@ -242,20 +239,19 @@ dset.dilgom.nmr <- c("nmrdata/FR-NMR/nmr_fr07.sas7bdat",
     select(-one_of(exclude.metabolites))
 ```
 
-Number of participants by NMR data
+Raw number of participants by NMR data
 
 ```{r Number of participans by available NMR-data in DILGOM, echo = FALSE}
 dset.dilgom.nmr %>% group_by(VUOSI) %>% summarize(n = n()) %>% mykable
 ```
-
 
 Joining phenotype and NMR-data
 
 ```{r dilgom join pheno and nmr data}
 dset.dilgom <- rbind(dilgom.baseline %>% mutate(cohort = "F2007"),
                      dilgom.followup %>% mutate(cohort = "F2014")) %>%
-    inner_join(., dset.dilgom.nmr, by = "sampleid") %>%
-    select(-VUOSI, -HAVTUN) %>%
+    right_join(., dset.dilgom.nmr, by = "sampleid") %>%
+    select(-HAVTUN, -VUOSI) %>%
     mutate(sampleid = gsub("^2007_", "2014_", sampleid))
 ```
 
@@ -284,6 +280,10 @@ dset.t2011 <- HEALTH_definitions("nmrdata/T20xx/T2011-phenotype.sas7bdat",
     select(-one_of(exclude.metabolites))
 ```
 
+Data frames for H2000 and H2011 share N:o
+`r inner_join(dset.t2000, dset.t2011, by = "sampleid") %>% nrow`
+participants.
+
 ```{r health missing by cohort, echo = FALSE}
 missingbycohort(rbind(dset.t2000, dset.t2011), vars) %>% mykable
 ```
@@ -300,11 +300,6 @@ dset.longitudinal.raw <- rbind(dset.dilgom,
 
 Number of participants takin part in both baseline and followup.
 
-```{r number of pairs between HEALTH samples, echo = FALSE}
-followup.pairs(dset.longitudinal.raw) %>% mykable
-```
-
-
 ## Finalizing data frame
 
 Excluding participants with missing values and those with missing baseline-followup data.
@@ -316,8 +311,10 @@ dset.longitudinal <- dset.longitudinal.raw %>%
     cleanlongitudinal()
 ```
 
+The number of participants before and after clean
+
 ```{r longitudinal characteristics, echo = FALSE}
-characteristicsTable(dset.longitudinal , strata = "cohort") %>% mykable
+characteristicsTable(dset.longitudinal, strata = "cohort") %>% mykable
 ```
 
 ## Diagnostic graphs

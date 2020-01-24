@@ -137,22 +137,6 @@ mycharacteristics <- function(dset.crosssectional, dset.longitudinal) {
         arrange(rowname)
 }
 
-followup.pairs <- function(dset) {
-    dset <- drop_na(dset) 
-
-    health.baseline <- dset %>% filter(cohort == "T2000") %>% pull(sampleid)
-    health.followup <- dset %>% filter(cohort == "T2011") %>% pull(sampleid)
-
-    dilgom.baseline <- dset %>% filter(cohort == "F2007") %>% pull(sampleid)
-    dilgom.followup <- dset %>% filter(cohort == "F2014") %>% pull(sampleid)
-
-    data.frame(cohort = c("HEALTH", "DILGOM"),
-               valid = c(health.baseline[health.baseline %in% health.followup] %>% length,
-                         dilgom.baseline[dilgom.baseline %in% dilgom.followup] %>% length),
-               missing = c(health.baseline[!health.baseline %in% health.followup] %>% length,
-                            dilgom.baseline[!dilgom.baseline %in% dilgom.followup] %>% length))
-}
-
 four_iqr_outlier <- function(list) {
     (list > median(list) + IQR(list) * 4) | (list < median(list) - IQR(list) * 4)
 }
