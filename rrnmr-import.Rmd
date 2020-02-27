@@ -81,13 +81,60 @@ vars <- c("age", "bmi", "bptreat", "cohort", "diabetes", "dias",
           "smoker", "sys")
 ```
 
+```{r albumin, eval = FALSE, include = FALSE}
+dset <- c("FR97" = "nmrdata/FR-NMR/nmr_fr97.sas7bdat",
+          "FR02" = "nmrdata/FR-NMR/nmr_fr02.sas7bdat",
+          "FR07" = "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+          "FR12" = "nmrdata/FR-NMR/nmr_fr12.sas7bdat",
+          "FT17" = "nmrdata/FR-NMR/nmr_ft17.sas7bdat",
+          "FR07" = "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+          "DILGOM" = "nmrdata/FR-NMR/nmr_dilgom14.sas7bdat",
+          "H2000" = "nmrdata/T20xx/T2000-nmr.sas7bdat",
+          "H2011" = "nmrdata/T20xx/T2011-nmr.sas7bdat") %>%
+    purrr::map(my_read_nmr) %>%
+    map_df(., ~.x, .id = "cohort") %>%
+    select(cohort, NMR_Albumin)
+
+dset %>% group_by(cohort) %>% summarize(mean = mean(NMR_Albumin, na.rm = TRUE),
+                                        sd = sd(NMR_Albumin, na.rm = TRUE),
+                                        min = min(NMR_Albumin, na.rm = TRUE),
+                                        max = max(NMR_Albumin, na.rm = TRUE),
+                                        n = n(),
+                                        na = sum(is.na(NMR_Albumin)))
+
+ggplot(dset, aes(x=NMR_Albumin)) +
+    facet_wrap(~cohort) +
+    geom_density() +
+    theme_classic()
+
+```
+
 Excluded metabolites
 
 ```{r Metabolites}
-exclude.metabolites <- excludemetabolites(bygroup = c("Lipoprotein subclasses",
-                                                      "Relative lipoprotein lipid concentrations"),
-                                          byname = c("Glycerol", "Gln"),
-                                          byexpression = ".*pct")
+names.manymissing <- c("nmrdata/FR-NMR/nmr_fr97.sas7bdat",
+                       "nmrdata/FR-NMR/nmr_fr02.sas7bdat",
+                       "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+                       "nmrdata/FR-NMR/nmr_fr12.sas7bdat",
+                       "nmrdata/FR-NMR/nmr_ft17.sas7bdat",
+                       "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+                       "nmrdata/FR-NMR/nmr_dilgom14.sas7bdat",
+                       "nmrdata/T20xx/T2000-nmr.sas7bdat",
+                       "nmrdata/T20xx/T2011-nmr.sas7bdat") %>%
+    sparse_metabolites
+
+exclude.metabolites <- excludemetabolites(byname = c("NMR_Glycerol",
+                                                     "NMR_Gln",
+                                                     "NMR_DHA",
+                                                     "NMR_LA",
+                                                     "NMR_MUFA",
+                                                     "NMR_Omega_3",
+                                                     "NMR_Omega_6",
+                                                     "NMR_PUFA",
+                                                     "NMR_SFA",
+                                                     names.manymissing),
+                                          bygroup = c("Relative lipoprotein lipid concentrations",
+                                                      "Lipoprotein subclasses"))
 ```
 
 <details>
@@ -95,7 +142,8 @@ exclude.metabolites <- excludemetabolites(bygroup = c("Lipoprotein subclasses",
 
 ```{r excluded metabolites list, echo = FALSE}
 data.frame(metabolite = exclude.metabolites) %>%
-    mutate(nmrname = bionames(metabolite)) %>%
+    mutate(nmrgroup = bioproperty(metabolite, "group"),
+           row = 1:n()) %>%
                mykable
 ```
 
@@ -122,7 +170,7 @@ dset.finrisk.nmr <- c("nmrdata/FR-NMR/nmr_fr97.sas7bdat",
                       "nmrdata/FR-NMR/nmr_fr12.sas7bdat",
                       "nmrdata/FR-NMR/nmr_ft17.sas7bdat") %>%
     purrr::map(my_read_nmr) %>%
-    purrr::reduce(rbind) %>%
+    map_df(., ~.x) %>%
     mutate(sampleid = sprintf("%s_%s", VUOSI, HAVTUN))  %>%
     dplyr::filter(VUOSI != 1992) %>%
     select(-one_of(exclude.metabolites))
@@ -191,12 +239,13 @@ Excluding participants with missing values.
 dset.crosssectional <- dset.crosssectional.raw %>%
     select(-HAVTUN, -VUOSI) %>%
     drop_na %>%
-    mutate(cohort = as.factor(cohort)) %>%
+    mutate(cohort = as.factor(cohort),
+           agegroup = factor(ifelse(age < median(age), "young", "old"))) %>%
     nmr_normalization()
 ```
 
 ```{r crossectional characteristics, echo = FALSE}
-characteristicsTable(dset.crosssectional , strata = "cohort") %>% mykable
+characteristicsTable(dset.crosssectional, strata = "cohort") %>% mykable
 ```
 
 ## Diagnostic plots
@@ -212,6 +261,7 @@ Box plot for metabolites
 ```{r scatter plots for metabolites, fig.width=20, fig.height=4, echo = FALSE}
 myboxplot(dset.crosssectional,
           vars = dset.crosssectional %>% colnames %>% mygrep(word = "NMR_"),
+          normalize = TRUE,
           rename = TRUE)
 ```
 
@@ -262,7 +312,6 @@ dset.dilgom <- rbind(dilgom.baseline %>% mutate(cohort = "F2007"),
 missingbycohort(dset.dilgom, vars) %>% mykable
 ```
 
-
 ## HEALTH
 
 Reading phenotype and NMR data for *HEALTH 2011* cohort. Number of
@@ -308,6 +357,7 @@ Excluding participants with missing values and those with missing baseline-follo
 dset.longitudinal <- dset.longitudinal.raw %>%
     drop_na() %>%
     nmr_normalization() %>%
+    mutate(agegroup = factor(ifelse(age < median(age), "young", "old"))) %>%
     cleanlongitudinal()
 ```
 
@@ -330,6 +380,7 @@ Box plot for metabolites
 ```{r scatter plots for metabolites longitudinal, fig.width=20, fig.height=4, echo = FALSE}
 myboxplot(dset.longitudinal, 
           vars = dset.longitudinal %>% colnames %>% mygrep(word = "NMR_"),
+          normalize = TRUE,
           rename = TRUE)
 ```
 

@@ -13,13 +13,10 @@ options(knitr.kable.NA = "")
 now <- format(Sys.time(), '%Y%m%d-%H%M%S')
 ```
 
-```{r Command line arguments, include = FALSE}
-if ("time" %in% names(args)) now <- args$time
-if ("loadlast" %in% names(args)) {
-    file <- paste0("session/", sort(list.files("session"), decreasing = TRUE)[1])
-    message("Loading variables from file ", file)
-    load(file)
-}
+```{r Command line arguments, include = FALSE, eval = FALSE}
+file <- paste0("session/", sort(list.files("session"), decreasing = TRUE)[1])
+message("Loading variables from file ", file)
+load(file)
 ```
 
 # Libraries
@@ -34,7 +31,7 @@ library(kableExtra)
 library(tidyr)
 library(broom)
 # MODELING
-library(MASS)
+#library(MASS)
 library(dplyr)
 library(parallel)
 library(doMC)
@@ -73,7 +70,6 @@ library(gridExtra)
 library(sure)
 library(stringr)
 library(haven)
-library(MASS)
 library(car)
 library(xfun)
 library(PredictABEL)
@@ -117,22 +113,8 @@ ivars <- c("age", "female", "bmi", "smoker", "diabetes", "leisure", "bptreat", "
 # Data import
 
 ```{r import raw data}
-dset <- readRDS("rds/dset-20200124-114642.rds")
+dset <- readRDS("rds/dset-20200214-153324.rds")
 metabolites <- getmetabolites(dset$crosssectional)
-```
-
-```{r debug, eval = FALSE}
-pwv <- read_tsv("pwv.txt") %>%
-    select(pwv_cf, havtun) %>%
-    mutate(sampleid = sprintf("2007_%s", havtun))
-
-dat <- full_join(dset$crosssectional, pwv, by = "sampleid")
-
-saveRDS(dat, file = "crosssectional_and_pvc.rds")
-
-test <- readRDS("crosssectional_and_pvc.rds")
-test %>% dim
-test %>% pull(pwv_cf) %>% is.na %>% summary
 ```
 
 ## Data layout
@@ -151,35 +133,21 @@ diagnosticqqplot(dset$crosssectional, metabolites)
 mycorrplot(dset$crosssectional, metabolites)
 ```
 
-### Longitudinal QQ-plots
-
-```{r data layout longitudinal, echo = FALSE, fig.width=8, fig.height=10}
-diagnosticqqplot(dset$longitudinal, metabolites)
-```
-
-### Longitudinal correlation plot
-
-```{r correlation plot longitudal, echo = FALSE, fig.width=8, fig.height=8}
-mycorrplot(dset$longitudinal, metabolites)
-```
-
-
 </details>
 
 ## Characteristics
 
 Cross-sectional sample
 
-```{r tableone cross-sectional}
-characteristicsTableFull(dset$crosssectional) %>% mykable
+```{r tableone cross-sectional, echo = FALSE}
+characteristicsTableFull(dset$crosssectional, test = TRUE) %>% mykable
 ```
 
 Longitudinal sample
 
-```{r tableone longitudinal}
-characteristicsTable(dset$longitudinal, "cohort") %>% mykable
+```{r tableone longitudinal, echo = FALSE}
+characteristicsTableFull(dset$longitudinal) %>% mykable
 ```
-
 
 ## PCA
 
@@ -190,37 +158,13 @@ pca.df <- dset$crosssectional %>%
     myprcomp(.)
 ```
 
-### PCA axes associated to htn
-
-<details>
-
-Associations between BP indices and PCA-axes.
-
-```{r pca axis}
-glm.pca <- loop.binomial(dset = pca.df$axes,
-                         response = "htn",
-                         loops = pca.df$axes %>% dplyr::select(starts_with("PC")) %>% colnames,
-                         covariates = ivars)
-```
-
-Significant results after FDR correction
-
-```{r pca results}
-loop.results(glm.pca, filterstr = "PC") %>%
-    dplyr::filter(qval < 0.05) %>%
-    betacip %>%
-    dplyr::select(response, term, mean_ci, p.value) %>%
-    myspread %>%
-    mykable
-```
-
-</details>
+### PCA with systolic BP
 
 ```{r PCA}
 ggsave(file = "cache/pca.png",
        plot = pca.plot(pca.df),
-       height = 3.1,
-       width = 5,
+       height = 2.6,
+       width = 4.9,
        dpi = 300,
        unit = "in")
 ```
@@ -232,17 +176,17 @@ Contribution of variables in main PCA axes
 ```{r Top contributors}
 df.loading <- pca.df$loading %>%
     mutate(axisorder = PC1,
-           nmrname = bionames(rowname),
-           nmrgroup = biogroups(rowname)) %>% 
-    select(PC1, PC2, nmrname, nmrgroup)
+           nmrname = bioproperty(rowname),
+           nmrgroup = bioproperty(rowname, "group")) %>% 
+    dplyr::select(PC1, PC2, nmrname, nmrgroup)
 
 arrangeGrob(grobs = lapply(c2l("PC1", "PC2"), function(x) df.loading %>% pca.loading(axis = x)),
             labels = c("A", "B"),
             ncol = 2) %>%
     ggsave(file = "cache/pca-proportion.png", plot = .,  height = 8, width = 8, dpi = 300)
 ```
-<img src = "cache/pca-proportion.png" />
 
+<img src = "cache/pca-proportion.png" />
 
 ### Scatter plots for PCA axis
 
@@ -259,9 +203,120 @@ pca.scatterplots(pca.df) %>%
 
 ## Cross-sectional associations
 
+### Associations between metabolites and htn
+
+```{r plot residuals}
+glm.sys <- loop.lm(dset$crosssectional, "sys", metabolites, ivars)
+glm.dias <- loop.lm(dset$crosssectional, "dias", metabolites, ivars)
+glm.htn <- loop.binomial(dset$crosssectional, "htn", metabolites, ivars)
+glm <- loop.results(glm.sys, glm.dias, glm.htn)
+```
+
+Forset plot for continuous version of the plot
+
+```{r ggforestplot for logistic models,  results = 'hide'}
+myforestplot(glm,
+             xlim = c(0.7, 1.5),
+             dims = c(18, 21),
+             logodds = TRUE,
+             responses = c("htn"),
+             file = "cache/glmforest-crosssectional-htn.png")
+```
+
+<img src="cache/glmforest-crosssectional-htn.png" />
+
+<details><summary>Linear models</summary>
+
+```{r ggforestplot for linear models,  results = 'hide', echo = FALSE}
+myforestplot(glm,
+             xlim = c(-2, 3),
+             responses = c("sys", "dias"),
+             file = "cache/glmforest-crosssectional-bp.png")
+```
+
+<img src="cache/glmforest-crosssectional-bp.png" />
+
+</details>
+
+<details><summary>Residuals</summary>
+
+```{r residuals, fig.width=8, fig.height=20, echo = FALSE}
+grid.arrange(grobs = loop.residuals(glm.htn), ncol = 4)
+```
+
+</details>
+
+Numerical values
+
+```{r ggforestplot numeric values, echo = FALSE}
+glm %>% 
+    results.table %>%
+    select("term", "htn_mean_ci", "htn_p.value", "sys_mean_ci", "sys_p.value", "dias_mean_ci", "dias_p.value") %>%
+    mykable
+```
+
+### Compare young and old
+
+```{r crosssectional young and old}
+glm.age.young <- dset$crosssectional %>%
+    filter(agegroup == "young") %>%
+    rename(young = htn) %>%
+    loop.binomial(., "young", metabolites, ivars)
+glm.age.old <- dset$crosssectional %>%
+    filter(agegroup == "old") %>%
+    rename(old = htn) %>%
+    loop.binomial(., "old", metabolites, ivars)
+
+glm.age <- loop.results(glm.age.young, glm.age.old)
+```
+
+```{r ggforestplot crosssectional age model, echo = FALSE }
+myforestplot(glm.age,
+             xlim = c(0.8, 1.5),
+             logodds = TRUE,
+             scale = agescale,
+             responses = c("old", "young"),
+             file = "cache/glmforest-crosssectional-age.png")
+```
+
+<img src = "cache/glmforest-crosssectional-age.png" />
+
+Numerical values
+
+```{r ggforestplot age diff numeric values, echo = FALSE}
+glm.age %>% 
+    results.table %>%
+    mykable
+```
+
+
+<details><summary>Spline</summary>
+
+```{r spline plot, echo = FALSE}
+{ dset$crosssectional %>%
+      gather(key, value, metabolites) %>%
+      mutate(name = bioproperty(key, "name")) %>%
+      ggplot(aes(x = age, y = value)) +
+      facet_wrap(~name, ncol = 4, scales = "free_y") +
+      geom_jitter(shape = ".", width = 0.5, alpha = 0.2) +
+      geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs")) +
+      scale_x_continuous("Age") +
+      scale_y_continuous("") +
+      theme_classic() +
+      theme(strip.background = element_blank(),
+            strip.text.x = element_text(size = 10)) } %>%
+    ggsave(file = "cache/spline-crosssectional.png", plot = ., height = 20, width = 8, dpi = 300, unit = "in")
+```
+
+<img src = "cache/spline-crosssectional.png" />
+
+</details>
+
 ### Comparing cross-sectional samples
 
-```{r comparing crosssectional samples}
+<details><summary>Comparing cross-sectional samples</summary>
+
+```{r comparing crosssectional samples, echo = FALSE}
 glm.compare <- dset$crosssectional %>%
     group_by(cohort) %>% 
     dplyr::do(loop.binomial(., "htn", metabolites, ivars %difference% "cohort") %>%
@@ -275,311 +330,79 @@ myforestplot(glm.compare,
              responses = c("1997", "2002", "2007", "2012", "T2000"),
              file = "cache/glmcompare-crosssectional.png",
              dims = c(18, 24),
-             colorscale = cohortscale)
+             scale = cohortscale)
 ```
 
 <img src = "cache/glmcompare-crosssectional.png" />
 
-### Compare young and old
-
-```{r young and old}
-glm.age <- dset$crosssectional %>%
-    mutate(agegroup = ifelse(age < median(age), "young", "old")) %>%
-    group_by(agegroup) %>% 
-    dplyr::do(loop.binomial(., "htn", metabolites, ivars %difference% "age" ) %>%
-              loop.results) %>%
-    ungroup %>%
-    mutate(response = agegroup)
-
-myforestplot(glm.age,
-             xlim = c(0.8, 1.4),
-             logodds = TRUE,
-             responses = c("young", "old"),
-             file = "cache/glmcompare-youngold.png",
-             dims = c(18, 24),
-             colorscale = bpscale)
-```
-
-<img src = "cache/glmcompare-youngold.png" />
-
-### Main mGLM models
-
-```{r plot residuals}
-glm.sys <- loop.lm(dset$crosssectional, "sys", metabolites, ivars)
-glm.dias <- loop.lm(dset$crosssectional, "dias", metabolites, ivars)
-glm.htn <- loop.binomial(dset$crosssectional, "htn", metabolites, ivars)
-glm <- loop.results(glm.sys, glm.dias, glm.htn)
-```
-
-```{r model debug, eval = FALSE}
-model1 <- glm(htn ~ NMR_Creatinine + age + female + bmi + smoker + diabetes + leisure + bptreat + koltreat + cohort,
-           family=binomial(link='logit'), 
-           data = dset$crosssectional)
-
-model2 <- glm(htn ~ NMR_Creatinine + age + female + bmi + smoker + diabetes + leisure + bptreat + koltreat + cohort + NMR_Creatinine:age,
-           family=binomial(link='logit'), 
-           data = dset$crosssectional)
-
-stargazer::stargazer(model1, model2, type = "text")
-
-groups <- dset$crosssectional %>%
-    dplyr::mutate(creatinine_group = ifelse(NMR_Creatinine < median(NMR_Creatinine), "low", "high"),
-                  age_group = ifelse(age < median(age), "young", "old")) %>%
-    group_by(creatinine_group, age_group) %>%
-    dplyr::summarize(preval = sum(htn == 1) / n()) %>%
-    spread(creatinine_group, preval)
-    
-groups %>% mykable
-
-```
-
-### Residuals
-
-
-<details>
-
-```{r residuals, fig.width=8, fig.height=20}
-grid.arrange(grobs = loop.residuals(glm.sys), ncol = 4)
-```
-
 </details>
 
-### Results
+## Longitudinal set
 
-Forset plot for continuous version of the plot
+### Change in systolic bp
 
-```{r ggforestplot for linear models,  results = 'hide'}
-myforestplot(glm,
-             xlim = c(-2, 3),
-             responses = c("sys", "dias"),
-             file = "cache/glmforestlin.png")
+```{r model}
+glm.longitudinal.htn <-  loop.binomial(getincidental(dset$longitudinal,
+                                                     keephypertensive = TRUE),
+                                       "htn.followup",
+                                       metabolites,
+                                       ivars %union% "sys")
+
+results.longitudinal <- loop.results(glm.longitudinal.htn)
 ```
 
-<img src="cache/glmforestlin.png" />
+Correlation between HDL and systolic bp
 
-```{r ggforestplot for logistic models,  results = 'hide'}
-myforestplot(glm,
-             xlim = c(0.8, 1.5),
-             logodds = TRUE,
-             responses = c("htn"),
-             file = "cache/glmforestlog.png")
-```
-
-<img src="cache/glmforestlog.png" />
-
-```{r ggforestplot numeric values}
-glm %>% 
-    results.table %>%
-    select("term", "htn_mean_ci", "htn_p.value", "sys_mean_ci", "sys_p.value", "dias_mean_ci", "dias_p.value") %>%
+```{r collinearity}
+lapply(c2l("NMR_HDL_C", "NMR_HDL2_C", "NMR_ApoA1", "NMR_HDL_size"),
+       function(x, df, method)
+           data.frame(all = cor(df$sys, df[[x]], method = method),
+                      normotensive = cor(df %>% filter(htn == 0) %>% pull(sys),
+                                         df %>% filter(htn == 0) %>% pull(x),
+                                         method = method),
+                       hypertensive = cor(df %>% filter(htn == 1) %>% pull(sys),
+                                         df %>% filter(htn == 1) %>% pull(x),
+                                         method = method)),
+       df = getincidental(dset$longitudinal, keephypertensive = TRUE),
+       method = "spearman") %>%
+    map_df(~.x, .id = "metabolite") %>%
     mykable
 ```
 
-## Longitudinal associations
+Numerical values
 
-### Comparing HEALTH and DILGOM
-
-```{r comparing health and dilcom}
-glmm.compare <- dset$longitudinal %>%
-    mutate(cohort = case_when(cohort == "F2007" ~ "DILGOM",
-                              cohort == "F2014" ~ "DILGOM",
-                              cohort == "T2000" ~ "HEALTH",
-                              cohort == "T2011" ~ "HEALTH")) %>%
-    group_by(cohort) %>% 
-    dplyr::do(loop.binomialmixed(., "htn", metabolites, ivars %difference% "cohort") %>%
-              loop.results) %>%
-    ungroup %>%
-    mutate(response = cohort)
-
-myforestplot(glmm.compare,
-             xlim = c(0.5, 2.5),
-             logodds = TRUE,
-             responses = c("DILGOM", "HEALTH"),
-             file = "cache/glmmcompare-longitudinal.png",
-             dims = c(18, 24),
-             colorscale = cohortscale)
-```
-
-<img src= "cache/glmmcompare-longitudinal.png" />
-
-### Full models
-
-```{r glmm models}
-glmm.sys <- loop.lmer(dset$longitudinal, "sys", metabolites, ivars)
-glmm.dias <- loop.lmer(dset$longitudinal, "dias", metabolites, ivars)
-glmm.htn <- loop.binomialmixed(dset$longitudinal, "htn", metabolites, ivars)
-glmm <- loop.results(glmm.sys, glmm.dias, glmm.htn)
-```
-	
-### Residuals
-
-<details>
-
-```{r glmm residuals, fig.width=8, fig.height=20}
-grid.arrange(grobs = loop.residuals(glmm.sys), ncol = 4)
-```
-
-</details>
-
-### Results
-	
-Forset plot for continuous version of the plot
-
-```{r ggforestplot for linear mixed effect models,  results = 'hide'}
-myforestplot(glmm,
-             xlim = c(-2, 3),
-             responses = c("sys", "dias"),
-             file = "cache/glmmforestlin.png")
-```
-
-<img src="cache/glmmforestlin.png" />
-
-```{r ggforestplot for logistic mixed effect models,  results = 'hide'}
-myforestplot(glmm,
-             xlim = c(0.8, 1.8),
-             logodds = TRUE,
-             responses = c("htn"),
-             file = "cache/glmmforestlog.png")
-```
-
-<img src="cache/glmmforestlog.png" />
-
-```{r ggforestplot numeric values for mixed effect models}
-glmm %>% 
+```{r longitudinal htn numerical table, echo = FALSE}
+results.longitudinal %>% 
     results.table %>%
-    select("term", "htn_mean_ci", "htn_p.value", "sys_mean_ci", "sys_p.value", "dias_mean_ci", "dias_p.value") %>%
     mykable
 ```
 
-### Arrow plots
 
-```{r Arrow plot}
-df.metabolites.baseline <- dset$longitudinal %>%
-    filter(cohort %in% c("T2000", "F2007")) %>%
-    select(starts_with("NMR_"))
-df.metabolites.followup <- dset$longitudinal %>%
-    filter(cohort %in% c("T2011", "F2014")) %>%
-    select(starts_with("NMR_"))
+```{r ggforestplot for incidental model all }
+myforestplot(results.longitudinal,
+             responses = "htn.followup",
+             logodds = TRUE,
+             xlim = c(0.7, 1.5),
+             dims = c(18, 21),
+             file = "cache/glmforest-longitudinal.png")
+```
 
-arrow.model <- prcomp(df.metabolites.baseline)
-arrow.baseline <- matdf(arrow.model$x) %>% select(PC1, PC2, rowname)
-arrow.followup <- predict(arrow.model, df.metabolites.followup) %>%
-    matdf %>%
-    select(PC1, PC2, rowname)
+<img src = "cache/glmforest-longitudinal.png" />
 
-arrow.df <- full_join(arrow.baseline, arrow.followup,
-                      by = c("rowname" = "rowname"),
-                      suffix = c(".baseline", ".followup")) %>%
-    mutate(norm = 4*sqrt((PC1.followup - PC1.baseline)**2 + (PC2.followup - PC2.baseline)**2),
-           u = (PC1.followup - PC1.baseline)/norm,
-           v = (PC2.followup - PC2.baseline)/norm,
-           length = log(norm),
-           towards_origo = (PC1.baseline*u < 0) & (PC2.baseline*v < 0)) %>%
-    filter(length > 0)
+<details><summary>Residuals</summary>
 
-g.arrow <- arrow.df %>% 
-    ggplot(aes(x = PC1.baseline, y = PC2.baseline, u = u, v = v)) +
-    geom_quiver(aes(colour = towards_origo, alpha = length), vecsize=0, size = 0.4) +
-    xlab("PC1") +
-    ylab("PC2") +
-    coord_fixed() +
-    scale_x_continuous(breaks = scales::pretty_breaks(n = 3), lim = c(-10, 10)) +
-    scale_y_continuous(breaks = scales::pretty_breaks(n = 3), lim = c(-10, 10)) +
-    theme_classic()
-
-ggsave(file = "cache/arrow.png",
-       plot = g.arrow,
-       height = 6,
+```{r longitudinal residuals, echo = FALSE}
+ggsave(file = "cache/residuals-longitudinal.png",
+       plot = grid.arrange(grobs = loop.residuals(glm.longitudinal.htn), ncol = 4),
+       height = 20,
        width = 8,
        dpi = 300,
        unit = "in")
 ```
 
-<img src = "cache/arrow.png"/>
-
-### RoC curve
-
-
-```{r roc set}
-dset.nri <- dset$longitudinal %>%
-    filter(cohort %in% c("F2007", "T2000"), htn == 0) %>% 
-    left_join(dset$longitudinal %>%
-              filter(cohort %in% c("F2014", "T2011")) %>%
-              select(sampleid, htn),
-              by = "sampleid",
-              suffix = c("", ".followup")) %>%
-    mutate(test = as.factor(case_when(htn == htn.followup ~ "unchanged",
-                                      htn == 0 & htn.followup == 1 ~ "become hypertensive",
-                                      htn == 1 & htn.followup == 0 ~ "become normotensive")))
-```
-
-```{r roc table}
-dset.nri %>% pull(test) %>% summary %>% mykable
-```
-
-```{r roc models}
-glm.min <- myglm(vars = ivars %difference% "bptreat", dset.nri)
-glm.max <- myglm(vars = ivars %difference% "bptreat" %union% metabolites, dset.nri)
-```
-
-<details><summary>ROC model results</summary>
-
-```{r roc results, results='asis'}
-myresulttable(list("min" = glm.min, "max" = glm.max)) %>%
-    mykable
-```
+<img src = "cache/residuals-longitudinal.png" />
 
 </details>
-
-```{r ROC}
-roc.tidy(df = dset.nri, models = list(low = glm.min, high = glm.max)) %>%
-    betacip(percent = TRUE) %>%
-    mykable
-```
-
-```{r predictabel, message = FALSE}
-mynri(std = glm.min, new = glm.max, niter = 10) %>%
-    betacip(percent = TRUE) %>%
-    mykable
-```
-
-```{r ROC plot}
-g.roc <- ggroc(list("min" = pROC::roc(myoutcomes(dset.nri), fitted(glm.min)),
-                    "max" = pROC::roc(myoutcomes(dset.nri), fitted(glm.max))),
-               size = 0.5) +
-    geom_abline(intercept = 1) +
-    coord_fixed() +
-    scale_x_reverse(expand = c(0, 0), breaks = scales::pretty_breaks(n = 3)) +
-    scale_y_continuous(expand = c(0, 0), breaks = scales::pretty_breaks(n = 3)) +
-    scale_colour_manual(name = "Model variables",
-                        labels = c("min" = "Clinical",
-                                   "max" = "Clinical and\nmetabolites"),
-                        values = c("min" = "blue",
-                                   "max" = "red")) +
-    xlab("Specifity") +
-    ylab("Sensitivity") +
-    theme_classic() +
-    theme(legend.position = c(0.8, 0.2),
-          legend.title = element_blank())
-ggsave(file = "cache/roc.png",
-       plot = g.roc,
-       height = 3,
-       width = 3,
-       dpi = 300,
-       unit = "in")
-```
-
-<img src = "cache/roc.png" />
-
-# Metabolite names
-```{r metabolite names}
-as.data.frame(metabolites) %>%
-    mutate(name = bionames(metabolites),
-           description = biodescription(metabolites),
-           group = biogroups(metabolites)) %>%
-    arrange(metabolites) %>% 
-    select(-metabolites) %>%
-    mykable 
-```
 
   
 ```{r save R image,  include = FALSE}

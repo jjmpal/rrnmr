@@ -78,18 +78,22 @@ getnamesbyclass <- function(groups) {
         pull(id)
 }
 
+getnamesbyexpression <- function(byexpression) {
+    ggforestplot::df_NG_biomarker_metadata %>%
+        filter(grepl(byexpression, machine_readable_name)) %>%
+        pull(machine_readable_name)
+}
+
 df2l <- function(df) {
     list <- df %>% pull(machine_readable_name)
     names(list) <- df %>% pull(alt)
     return(list)
 }
 
-excludemetabolites <- function(bygroup, byname, byexpression) {
-    ret.group <- getnamesbyclass(bygroup)
-    ret.expr <- ggforestplot::df_NG_biomarker_metadata %>%
-        filter(grepl(byexpression, machine_readable_name)) %>%
-        pull(machine_readable_name)
-    c(ret.group, paste0("NMR_", c(byname, ret.expr))) %>% unique
+excludemetabolites <- function(byname = c(), bygroup, byexpression) {
+    ret.group <- if (missing(bygroup)) c() else getnamesbyclass(bygroup)
+    ret.expr <- if (missing(byexpression)) c() else getnamesbyexpression(byexpression)
+    c(ret.group, ret.expr, byname) %>% unique
 }
 
 
@@ -117,7 +121,7 @@ mycharacteristics <- function(dset.crosssectional, dset.longitudinal) {
     characteristics <- rbind(dset.crosssectional %>% mutate(type = "crosssectional"),
                              dset.longitudinal %>% mutate(type = "longitudinal")) %>%
         select(type, starts_with("NMR_")) %>%
-        rename_at(vars(starts_with("NMR_")), ~bionames(.)) %>%
+        rename_at(vars(starts_with("NMR_")), ~bioproperty(.)) %>%
         tableone::CreateTableOne(data = .,
                                  strata = "type")
     print(characteristics,
@@ -143,7 +147,18 @@ four_iqr_outlier <- function(list) {
 
 nmr_normalization <- function(df) {
     df %>%
-        mutate_at(vars(starts_with("NMR_")), ~log(.)) %>%
+        mutate_at(vars(setdiff(starts_with("NMR"), ends_with("_pct"))), ~log(.)) %>%
         filter_at(vars(starts_with("NMR_")), all_vars(!four_iqr_outlier(.))) %>%
-        mutate_at(vars(starts_with("NMR_")), ~scale(.))
+        mutate_at(vars(setdiff(starts_with("NMR"), ends_with("_pct"))), ~scale(.))
+}
+
+sparse_metabolites <- function(files, limit = 0.05) {
+    purrr::map(files, my_read_nmr) %>%
+        map_df(., ~.x) %>%
+        select(starts_with("NMR_")) %>%
+        gather(key, value) %>%
+        group_by(key) %>%
+        summarize(missing = sum(is.na(value))/n()) %>%
+    filter(missing > limit) %>%
+        pull(key)
 }

@@ -22,13 +22,13 @@ characteristics.names <- function(onlyvars = FALSE) {
 
 }
 
-characteristicsTableFull <- function(dset) {
-    table.sub <- characteristicsTable(dset, "cohort")
+characteristicsTableFull <- function(dset, test = TRUE) {
+    table.sub <- characteristicsTable(dset, "cohort", test = test)
     table.tot <- characteristicsTable(dset)
     cbind(table.tot, table.sub)
 }
 
-characteristicsTable <- function(dset, strata) {
+characteristicsTable <- function(dset, strata, test = FALSE) {
     nostrata <- missing(strata)
     characteristics <- tableone::CreateTableOne(
                                      strata = strata,
@@ -36,7 +36,8 @@ characteristicsTable <- function(dset, strata) {
                                      vars = characteristics.names(TRUE),
                                      factorVars = getfactorvariables(dset,
                                                                      characteristics.names(TRUE)),
-                                     test = !missing(strata))
+                                     test = test)
+
     print(characteristics,
                       exact = "stage",
                       quote = FALSE,
@@ -48,8 +49,7 @@ characteristicsTable <- function(dset, strata) {
         as.data.frame %>%
         tibble::rownames_to_column(var = "rowname") %>%
         format(justify = "left", trim = TRUE) %>%
-        mutate(rowname = characteristics.names()[gsub("^ *([A-Za-z_0-9]+).*", "\\1", rowname)]) %>%
-        { if (!nostrata) select(., -test) else . }
+        mutate(rowname = characteristics.names()[gsub("^ *([A-Za-z_0-9]+).*", "\\1", rowname)])
 }
 
 tableone <- function(characteristics) {
@@ -166,9 +166,11 @@ roc.tidy <- function(df, models) {
         roc.ret <- pROC::roc(myoutcomes(df), fitted(model))
         roc.ci <- pROC::ci(roc.ret)
         attributes(roc.ci) <- NULL
+        roc.p <- wilcox.test(myoutcomes(df), fitted(model), paired=FALSE)$p.value
         data.frame(estimate = roc.ci[2],
                    conf.low = roc.ci[1],
-                   conf.high = roc.ci[3])
+                   conf.high = roc.ci[3],
+                   p.value = roc.p)
     }) %>%
         purrr::map_df(~as.data.frame(.x), .id="model")
 
@@ -190,3 +192,31 @@ myresulttable <- function(list) {
         purrr::map_df(., ~as.data.frame(.x), .id = "model") %>%
         spread(model, mean_ci)
 } 
+
+typologyformatter <- function(data, font = 12, typology, left = c(1), hleft = c(1)) {
+  flex <- flextable(data = data) %>%
+    flextable::theme_booktabs() %>%
+    flextable::border(border = fp_border(width=0), part="body") %>%
+    flextable::border(border = fp_border(width=0), part="header") %>%
+    flextable::border(part="header", border.bottom = fp_border(width=1))
+
+  if (!missing(typology)) {
+      flex <- flex %>%
+          set_header_df(mapping = typology, key = "col_keys") %>%
+          merge_h(part = "header") %>%
+          flextable::border(part="header", border.bottom = fp_border(width=1))
+      if (missing(hleft)) {
+          hleft <- c(2)
+      }
+  }
+
+  flex %>%
+      flextable::border(i = nrow(data), part="body", border.bottom = fp_border(width=1)) %>%
+      flextable::bold(bold = FALSE, part = "header") %>%
+      flextable::bold(bold = FALSE, part = "body") %>%
+      flextable::fontsize(size = font, part = "header") %>%
+      flextable::fontsize(size = font, part = "body") %>%
+      flextable::align(align = "center", part = "all") %>%
+      flextable::align(align = "left", part = "header", j = left, i = hleft) %>%
+      flextable::align(align = "left", part = "body", j = left)
+}

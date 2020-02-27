@@ -35,33 +35,16 @@ standardnames <- function(x, prefix = "NMR_") {
     toupper(paste0(prefix, gsub("[/-]", "_", x)))
 }
 
-bionames <- function(metabolites) {
+bioproperty <- function(metabolites, property = "name") {
     md <- as.data.frame(ggforestplot::df_NG_biomarker_metadata) 
     metabolites %>%
         purrr::map_chr(function(id) {
             id <- gsub("NMR_", "", id)
             names <- md %>% filter(machine_readable_name == id)
-            return(descriptivenames(names$abbreviation[1], names$description[1]))
-        })
-}
-
-biogroups <- function(metabolites) {
-    md <- as.data.frame(ggforestplot::df_NG_biomarker_metadata) 
-    metabolites %>%
-        purrr::map_chr(function(id) {
-            id <- gsub("NMR_", "", id)
-            names <- md %>% filter(machine_readable_name == id)
-            return(names$group[1])
-        })
-}
-
-biodescription <- function(metabolites) {
-    md <- as.data.frame(ggforestplot::df_NG_biomarker_metadata) 
-    metabolites %>%
-        purrr::map_chr(function(id) {
-            id <- gsub("NMR_", "", id)
-            names <- md %>% filter(machine_readable_name == id)
-            return(names$description[1])
+            if (property == "name")
+                return(descriptivenames(names$abbreviation[1], names$description[1]))
+            else
+                return(names[[property]][1])
         })
 }
 
@@ -77,7 +60,7 @@ metanames <- function(x) {
               TRUE ~ x)
 }
 
-descriptivenames <- function(abbr, desc, length = 20) {
+descriptivenames <- function(abbr, desc, length = 24) {
     ifelse(nchar(desc) < length, desc, abbr)
 }
 
@@ -100,7 +83,7 @@ permetaboliteconditions <- function(dset, fun) {
     stopifnot(!missing(dset), !missing(fun))
     map_df(dset, ~as.data.frame(.x), .id = "setup") %>% 
         select(setup, starts_with("NMR_")) %>%
-        rename_at(vars(-setup), ~bionames(.)) %>%
+        rename_at(vars(-setup), ~bioproperty(.)) %>%
         group_by(setup) %>%
         mutate_at(., vars(-setup), ~ifelse(fun(.), 1, 0)) %>%
         summarize_all(sum) %>%
