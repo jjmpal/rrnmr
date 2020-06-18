@@ -24,7 +24,8 @@ mytidy <- function(model) {
 }
 
 myformula <- function(response, term, covariates, interaction, mixed) {
-    terms <- term %union% covariates
+    terms <- term %union% covariates %>%
+        { if(response %in% c("htn", "sexfemale", "sexmale", "old", "young")) . %difference% "bptreat" else . }
     if (!missing(interaction)) {
         terms <- terms %union% paste0(term, ":", interaction)
     }
@@ -120,7 +121,7 @@ loop.lm <- function(dset,
                     covariates = c()) {
     models <- parallel::mclapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates)
-        ret <- stats::lm(formula = as.formula(fo), data = dset)
+        ret <- stats::lm(formula = as.formula(fo), data = dset, na.action = na.omit)
         ret$call <- as.formula(fo)
         ret
     }, mc.cores = min(length(loops), 8))
@@ -148,7 +149,10 @@ loop.binomial <- function(dset,
     stopifnot(!missing(dset), !missing(response), !missing(loops))
     mclapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates)
-        ret <- stats::glm(formula = as.formula(fo), family=binomial(link='logit'), data = dset)
+        ret <- stats::glm(formula = as.formula(fo),
+                          family=binomial(link='logit'),
+                          data = dset,
+                          na.action = na.omit)
         ret$call <- as.formula(fo)
         ret
     }, mc.cores = min(length(loops), 8))
@@ -171,27 +175,43 @@ loop.residuals <- function(...) {
         term <- ifelse(isS4(model),
                        all.vars(model@call)[2],
                        all.vars(model$call)[2])
-        ggplot(data.frame(fitted = fitted(model),
-                          resid = resid(model)),
-               aes(x = fitted, y = resid)) +
-        geom_jitter(shape = ".") +
-            geom_smooth(se = FALSE, method = "loess", formula = "y ~ x") +
+        ggplot(broom::augment(model), aes(.fitted,.resid)) +
+            geom_point(shape = ".") +
+            geom_smooth(method = 'gam', formula = y ~ s(x, bs = "cs")) +
             geom_hline(yintercept = 0, linetype = "dotted") +
-            scale_x_continuous("Fitted Values") +
-            scale_y_continuous("Residual") +
+            scale_x_continuous(name = "Fitted Values") +
+            scale_y_continuous(name = "Residual") +
             ggtitle(sprintf("%s", bioproperty(term))) +
             theme_bw()
     })
 }
 
-results.table <- function(df, exponentiate = c("htn", "htn3", "htn.followup"), percent = FALSE) {
+loop.qq <- function(...) {
+    lapply(c(...), function(model) {
+        term <- ifelse(isS4(model),
+                       all.vars(model@call)[2],
+                       all.vars(model$call)[2])
+        ggplot(data = broom::augment(model), mapping = aes(sample = .resid)) +
+            geom_abline(intercept = 0, size = 1, slope=1, color = "blue") +
+            stat_qq(geom = "line", size = 1) +
+            scale_x_continuous("Fitted Values") +
+            scale_y_continuous("Residual") +
+            coord_fixed() +
+            ggtitle(sprintf("%s", bioproperty(term))) +
+            theme_bw()
+    })
+}
+
+
+results.table <- function(df, exponentiate = c("htn", "htn3", "htn.followup"), percent = FALSE, drop = FALSE) {
     dplyr::mutate(df,
                   term = bioproperty(term),
                   estimate = ifelse(response %in% exponentiate, exp(estimate), estimate),
                   conf.low = ifelse(response %in% exponentiate, exp(conf.low), conf.low),
                   conf.high = ifelse(response %in% exponentiate, exp(conf.high), conf.high)) %>%
         betacip(percent = percent) %>%
-        myspread()
+        myspread() %>%
+        { if (drop) filter_at(., vars(contains("p.value")), any_vars(. < 0.05)) else .}
 }
 
 # Others
@@ -208,12 +228,17 @@ filternullcohorts <- function(dset, var, missinglevel = -0.5) {
 }
 
 myprcomp <- function(matrix) {
-    df <- matdf(matrix) 
-    prcomp.ret <- prcomp(df %>% dplyr::select(starts_with("NMR_")))
+    df <- matdf(matrix)
+    prcomp.ret <- prcomp(~.,
+           data = dplyr::select(df, starts_with("NMR_")),
+           center = TRUE,
+           scale = TRUE,
+           na.action = na.omit)
     prcomp.loading <- matdf(prcomp.ret$rotation)
     prcomp.contribution <- prcomp.ret$sdev^2/sum(prcomp.ret$sdev^2)
     prcomp.axes <- full_join(df, matdf(prcomp.ret$x), by = "rowname") %>%
-             prcomprenamer
+        prcomprenamer %>%
+        mutate_at(vars(starts_with("PC")), scale)
     list("axes" = prcomp.axes,
          "contribution " = prcomp.contribution,
          "model" = prcomp.ret,
@@ -288,7 +313,7 @@ myreclassification <-  function (data, response = "htn.followup", predrisk1, pre
                                     y$z.idi)))))
 }
 
-getincidental <- function(dset, keephypertensive = FALSE) {
+getincidental <- function(dset, keephypertensive = TRUE) {
     dset %>%
         filter(cohort %in% c("F2007", "T2000"), (htn == 0 | keephypertensive)) %>% 
         left_join(.,

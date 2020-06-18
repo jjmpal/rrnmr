@@ -23,9 +23,9 @@ characteristics.names <- function(onlyvars = FALSE) {
 }
 
 characteristicsTableFull <- function(dset, test = TRUE) {
-    table.sub <- characteristicsTable(dset, "cohort", test = test)
+    table.sub <- characteristicsTable(dset, "cohort", test = test) %>% select(-test)
     table.tot <- characteristicsTable(dset)
-    cbind(table.tot, table.sub)
+    dplyr::full_join(table.tot, table.sub, by = "rowname")
 }
 
 characteristicsTable <- function(dset, strata, test = FALSE) {
@@ -39,17 +39,18 @@ characteristicsTable <- function(dset, strata, test = FALSE) {
                                      test = test)
 
     print(characteristics,
-                      exact = "stage",
-                      quote = FALSE,
-                      noSpaces = TRUE,
-                      printToggle = FALSE,
-                      digits = 1,
-                      pDigits = 3,
-                      contDigits=1)  %>%
+          exact = "stage",
+          quote = FALSE,
+          noSpaces = TRUE,
+          printToggle = FALSE,
+          digits = 1,
+          pDigits = 3,
+          contDigits=1) %>%
         as.data.frame %>%
         tibble::rownames_to_column(var = "rowname") %>%
         format(justify = "left", trim = TRUE) %>%
-        mutate(rowname = characteristics.names()[gsub("^ *([A-Za-z_0-9]+).*", "\\1", rowname)])
+        mutate(rowname = characteristics.names()[gsub("^ *([A-Za-z_0-9]+).*", "\\1", rowname)] %>%
+                   unlist(use.names=F))
 }
 
 tableone <- function(characteristics) {

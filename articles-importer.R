@@ -25,8 +25,7 @@ my_read_nmr <- function(file, exclude = c("GLUCONLAC",
         rename_all(toupper) %>%
         rename_all(~metabolitemapping(.)) %>%
         mutate_at(vars(starts_with("NMR_")), ~tryCatch(suppressWarnings(as.numeric(.)))) %>%
-        mutate_at(vars(starts_with("NMR_")), ~ifelse(. > 0, ., NA)) %>%
-        select(., -one_of(exclude[exclude %in% colnames(.)]))
+        select(., -one_of(exclude[exclude %in% colnames(.)])) 
 }
 
 
@@ -52,21 +51,22 @@ mydescribe <- function(df) {
                            ratio = sum(is.na(value))/n())
 }
 
-listna <- function(df) {
+listna <- function(df, relation = "|") {
     lapply(df, function(x) is.na(x)) %>%
-        Reduce("|", .)
+        Reduce(relation, .)
 }
 
 missingbycohort <- function(dset, var.fr) {
     var.nmr <- colnames(dset) %>% mygrep(word = "NMR_")
     dset %>%
         dplyr::mutate(NA.fr = listna(.[var.fr]),
-               NA.nmr = listna(.[var.nmr]),
+               NA.nmr = listna(.[var.nmr], relation = "&"),
                NA.all = NA.fr | NA.nmr) %>%
         group_by(cohort) %>%
         summarize(N.raw = n(),
                   missing.meta = sum(NA.fr),
                   missing.nmr = sum(NA.nmr),
+                  missing.both = sum(NA.all),
                   N = N.raw-sum(NA.all))
 }
 
@@ -141,24 +141,20 @@ mycharacteristics <- function(dset.crosssectional, dset.longitudinal) {
         arrange(rowname)
 }
 
-four_iqr_outlier <- function(list) {
-    (list > median(list) + IQR(list) * 4) | (list < median(list) - IQR(list) * 4)
-}
-
-nmr_normalization <- function(df) {
-    df %>%
-        mutate_at(vars(setdiff(starts_with("NMR"), ends_with("_pct"))), ~log(.)) %>%
-        filter_at(vars(starts_with("NMR_")), all_vars(!four_iqr_outlier(.))) %>%
-        mutate_at(vars(setdiff(starts_with("NMR"), ends_with("_pct"))), ~scale(.))
-}
-
 sparse_metabolites <- function(files, limit = 0.05) {
     purrr::map(files, my_read_nmr) %>%
         map_df(., ~.x) %>%
         select(starts_with("NMR_")) %>%
         gather(key, value) %>%
         group_by(key) %>%
-        summarize(missing = sum(is.na(value))/n()) %>%
+        dplyr::summarize(missing = sum(is.na(value))/n()) %>%
     filter(missing > limit) %>%
         pull(key)
+}
+
+scale_and_filter_nmr <- function(dset) {
+    dset %>%
+        mutate_at(vars(starts_with("NMR")), ~ifelse(. == 0, NA, .)) %>%
+        filter_at(vars(starts_with("NMR")), any_vars(!is.na(.))) %>%
+        mutate_at(vars(starts_with("NMR")), ~scale(.)) 
 }

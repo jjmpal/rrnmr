@@ -79,19 +79,6 @@ getmetabolites <- function(dset) {
      dset %>% dplyr::select(starts_with("NMR_")) %>% colnames %>% sort
 }
 
-permetaboliteconditions <- function(dset, fun) {
-    stopifnot(!missing(dset), !missing(fun))
-    map_df(dset, ~as.data.frame(.x), .id = "setup") %>% 
-        select(setup, starts_with("NMR_")) %>%
-        rename_at(vars(-setup), ~bioproperty(.)) %>%
-        group_by(setup) %>%
-        mutate_at(., vars(-setup), ~ifelse(fun(.), 1, 0)) %>%
-        summarize_all(sum) %>%
-        gather(metabolite, outliers, -setup) %>%
-        spread(setup, outliers) %>%
-        filter(crosssectional + longitudinal > 0)
-}
-
 cleanlongitudinal <- function(df) {
     mutate(df, testee = gsub(".*_", "", sampleid)) %>%
         group_by(testee) %>%

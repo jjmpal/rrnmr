@@ -6,8 +6,8 @@ myforestplot <- function(dset,
                                       "Lipoprotein particle sizes",
                                       "Apolipoproteins",
                                       "Fatty acids",
-                                      "Fluid balance"),
-                         paneltwo = c("Glycerides and phospholipids",
+                                      "Glycerides and phospholipids"),
+                         paneltwo = c("Fluid balance",
                                       "Glycolysis related metabolites",
                                       "Ketone bodies",
                                       "Amino acids",
@@ -86,13 +86,13 @@ forest.order.and.scale <- function(df, groups, heightadj) {
 
 bpscale <- function() {
  scale_colour_manual(name = "Blood pressure variables",
-                     labels = c("sys" = "Systole",
+                     labels = c("sys" = "Systole (mmHg)",
                                 "log(sys)" = "Systole",
-                                       "dias" = "Diastole",
+                                       "dias" = "Diastole (mmHg)",
                                        "htn" = "Hypertension",
                                        "sys.diff.pct" = "Percentage change in systole",
                                        "dias.diff.pct" = "Percantage change in diastole",
-                                       "sys.followup" = "Systole",
+                                       "sys.followup" = "Systole (mmHg)",
                                 "htn.followup" = "Hypertension",
                                 "followup" = "Hypertension"),
                      values = c("sys" = "red",
@@ -112,6 +112,14 @@ agescale <- function() {
                                   "old" = "Older than median age"),
                        values = c("young" = 25,
                                   "old" = 24))
+}
+
+sexscale <- function() {
+    scale_shape_manual(name = "Sex",
+                       labels = c("sexfemale" = "Women",
+                                  "sexmale" = "Men"),
+                       values = c("sexfemale" = 24,
+                                  "sexmale" = 25))
 }
 
 cohortscale <- function() {
@@ -135,22 +143,32 @@ myforest.nestedplot <- function(data,
                                 percentage,
                                 scale,
                                 xlim,
-                                label = "Effect size (95%-CI) per 1-SD or 1-% metabolite concentration",
+                                label = "Effect size (95%-CI) per 1-SD metabolite concentration",
                                 omitlegend,
                                 test,
                                 panelonelast,
                                 paneltwolast) {
-    ggforestplot::forestplot(df = data,
-                             name = nmrname,
-                             estimate = estimate,
-                             se = std.error,
-                             logodds = logodds,
-                             pvalue = qval,
-                             title = sprintf("%-50s", group),
-                             psignif = 0.05,
-                             xlim = xlim,
-                             colour = response,
-                             shape = response) +
+    { if (scale()$aesthetics == "shape")
+          ggforestplot::forestplot(df = data,
+                                   name = nmrname,
+                                   estimate = estimate,
+                                   se = std.error,
+                                   logodds = logodds,
+                                   pvalue = qval,
+                                   title = sprintf("%-50s", group),
+                                   psignif = 0.05,
+                                   xlim = xlim,
+                                   shape = response)
+      else ggforestplot::forestplot(df = data,
+                                    name = nmrname,
+                                    estimate = estimate,
+                                    se = std.error,
+                                    logodds = logodds,
+                                    pvalue = qval,
+                                    title = sprintf("%-50s", group),
+                                    psignif = 0.05,
+                                    xlim = xlim,
+                                    colour = response) } +
         scale_y_discrete(limits = forest.customorder(data$nmrname)) +
         xlab(ifelse(logodds,
                     myforest.labelformatter.logodds(label),
@@ -164,10 +182,6 @@ myforest.nestedplot <- function(data,
           else scale_x_continuous(breaks = scales::pretty_breaks(n = 5)) } +
         guides(colour = guide_legend(override.aes = list(size=4, shape = 19))) +
         scale() +
-        { if (agescale()$aesthetics == "shape")
-              scale_colour_manual(values = rep("black", 10))
-          else scale_shape_manual(values = rep(1, 10))} +
-        { if (agescale()$aesthetics == "shape") guides(color = FALSE) else guides(shape = FALSE) } +
         ggplot2::theme(plot.title = element_text(size = 11,
                                                  face = "italic",
                                                  margin = unit(c(0, 1, 1, 0), "mm")),
@@ -251,9 +265,10 @@ myforestplot.heightadj <- function(ggplot_multi, height = 1) {
 }
 
 myoutlier <- function(list) {
-    list < quantile(list, 0.25) - IQR(list) * 1.5 |
-        list > quantile(list, 0.75) + IQR(list) * 1.5 |
-        (list > quantile(list, 0.40) & list < quantile(list, 0.60)) # buggy jitterdodge
+    list < quantile(list, 0.25, na.rm = TRUE) - IQR(list, na.rm = TRUE) * 1.5 |
+        list > quantile(list, 0.75, na.rm = TRUE) + IQR(list, na.rm = TRUE) * 1.5 |
+        (list > quantile(list, 0.40, na.rm = TRUE) &
+         list < quantile(list, 0.60, na.rm = TRUE)) # buggy jitterdodge
 }
 
 myboxplot <- function(df, vars = c(), rename = FALSE, normalize = FALSE) {
@@ -297,15 +312,21 @@ pca.scatterplots <- function(pca) {
 
 pca.plot <- function(pca, correlation) {
     ggplot(pca$axes, aes(x = PC001, y = PC002)) +
-        stat_summary_hex(aes(z = sys), fun = median, binwidth = c(1.0, 1.0)) +
-        scale_fill_gradient(name = "Systolic BP",
-                            low = "gray100",
-                            high = "black",
-                            breaks = c(100, 150, 200),
-                            limits = c(100, 200)) +
+        stat_summary_hex(aes(z = scale(sys, scale = FALSE)),
+                         fun = median,
+                         binwidth = c(0.33, 0.33)) +
+        scale_fill_gradient2(name = "Deviation from\nmedian systolic\nBP in mmHG",
+                             low = "darkblue",
+                             mid = "white",
+                             high = "darkred",
+                             midpoint = 0,
+                             breaks = c(-40, 0, 40),
+                             limits = c(-40, 40)) +
         coord_equal() +
-        xlab(pca.title(pca$contribution, axis = 1)) +
-        ylab(pca.title(pca$contribution, axis = 2)) +
+        scale_x_continuous(breaks = scales::pretty_breaks(n = 5),
+                           name = pca.title(pca$contribution, axis = 1)) +
+        scale_y_continuous(breaks = scales::pretty_breaks(n = 5),
+                           name = pca.title(pca$contribution, axis = 2)) +
         theme_classic() +
         theme(legend.background = element_blank(),
               legend.title = element_text(size = 9),
@@ -316,6 +337,7 @@ pca.plot <- function(pca, correlation) {
               legend.direction = "vertical",
               plot.margin = unit(c(0, 26, 0, 2), "mm"))
 }
+
 
 pca.loading <- function(pca,
                         axis = "PC1",
@@ -351,16 +373,19 @@ pca.loading <- function(pca,
 }
 
 
-diagnosticqqplot <- function(dset, vars) {
+diagnosticqqplot <- function(dset, vars, size = 16) {
     dplyr::select(dset, vars) %>%
         rename_all(~bioproperty(.)) %>%
         gather(key, value) %>%
         ggplot2::ggplot(ggplot2::aes(sample = value)) +
-        facet_wrap(~key, ncol = 8, scales = "free_y") +
+        facet_wrap(~key, ncol = 8) +
         stat_qq(size = 0.1) +
         stat_qq_line() +
         theme_classic() +
-        theme(legend.position = "none")
+        theme(legend.position = "none",
+              strip.background = element_blank(),
+              strip.placement = "bottom",
+              strip.text.x = element_text(size = size))
 }
 
 pca.kde2d <- function(df, htn = 0, n = 500) {
