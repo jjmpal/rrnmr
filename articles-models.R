@@ -15,7 +15,7 @@
 
 ## General functions
 
-mytidy <- function(model) {
+tidywithresponse <- function(model) {
     dependant <- ifelse(isS4(model),
                         all.vars(model@call)[1],
                         all.vars(model$call)[1])
@@ -38,15 +38,16 @@ myformula <- function(response, term, covariates, interaction, mixed) {
     sprintf("%s ~ %s", response, paste(terms, collapse = " + "))
 }
 
-loop.results <- function(..., filterstr = "NMR_", fdrbygroup = FALSE) {
-    purrr::map_df(c(...), ~as.data.frame(mytidy(.x))) %>%
+loop.results <- function(..., filterstr = "NMR_", usemodelterm = FALSE) {
+    purrr::map_df(c(...), ~as.data.frame(tidywithresponse(.x)), .id = "model") %>%
+        { if (usemodelterm) dplyr::mutate(., term = model) else . } %>%
+        dplyr::select(-model) %>%
         dplyr::filter(grepl(filterstr, term)) %>%
         dplyr::mutate(conf.low = estimate - qnorm(0.975) * std.error,
                       conf.high = estimate + qnorm(0.975) * std.error) %>%
-        { if (fdrbygroup) group_by(., response) %>%
-                              mutate(qval = p.adjust(p.value, method="BH")) %>%
-                              ungroup
-          else mutate(., qval = p.adjust(p.value, method="BH")) }
+        group_by(., response) %>%
+        mutate(qval = p.adjust(p.value, method="BH")) %>%
+        ungroup 
 }
 
 
@@ -109,8 +110,7 @@ loop.cox <- function(dset,
         fo <- myformula(response, loop, covariates)
         ret <- coxph(formula = as.formula(fo), ties = "breslow", data = dset)
         ret$call <- as.formula(fo)
-        ret
-    }, mc.cores = min(length(loops), 8))
+    }, mc.cores = min(length(loops), 4))
 }
 
 ## Linear and logistic models
@@ -124,7 +124,28 @@ loop.lm <- function(dset,
         ret <- stats::lm(formula = as.formula(fo), data = dset, na.action = na.omit)
         ret$call <- as.formula(fo)
         ret
-    }, mc.cores = min(length(loops), 8))
+    }, mc.cores = min(length(loops), 4))
+}
+
+loop.rma <- function(dset,
+                    response,
+                    loops,
+                    covariates = c()) {
+    lapply(c2l(loops), function(loop) {
+        ret_by_cohorts <- dset %>%
+            group_by(cohort) %>%
+            do(single.lm(., response, loop, covariates) %>%
+               tidy %>%
+               filter(term == loop))
+        rma(yi = ret_by_cohorts$estimate, sei = ret_by_cohorts$std.error, method="FE")
+    })
+}
+
+single.lm <- function(dset, response, metabolite, covariates = c()) {
+    fo <- myformula(response, metabolite, covariates)
+    ret <- stats::lm(formula = as.formula(fo), data = dset, na.action = na.omit)
+    ret$call <- as.formula(fo)
+    ret
 }
 
 loop.gamma <- function(dset,
@@ -139,7 +160,7 @@ loop.gamma <- function(dset,
                           data = dset)
         ret$call <- as.formula(fo)
         ret
-    }, mc.cores = min(length(loops), 8))
+    }, mc.cores = min(length(loops), 4))
 }
 
 loop.binomial <- function(dset,
@@ -147,15 +168,16 @@ loop.binomial <- function(dset,
                     loops,
                     covariates = c()) {
     stopifnot(!missing(dset), !missing(response), !missing(loops))
-    mclapply(c2l(loops), function(loop) {
+    lapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates)
+        message(fo)
         ret <- stats::glm(formula = as.formula(fo),
                           family=binomial(link='logit'),
                           data = dset,
                           na.action = na.omit)
         ret$call <- as.formula(fo)
         ret
-    }, mc.cores = min(length(loops), 8))
+    })
 }
 
 

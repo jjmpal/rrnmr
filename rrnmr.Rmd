@@ -31,7 +31,6 @@ library(kableExtra)
 library(tidyr)
 library(broom)
 # MODELING
-#library(MASS)
 library(dplyr)
 library(parallel)
 library(doMC)
@@ -114,17 +113,9 @@ ivars <- c("age", "female", "bmi", "smoker", "diabetes", "leisure", "bptreat", "
 # Data import
 
 ```{r import raw data}
-dset <- readRDS("rds/dset-20200611-094812.rds")
+dset <- readRDS("rds/dset-20200820-184513.rds")
 metabolites <- getmetabolites(dset$crosssectional)
 ```
-
-```{r test, eval = FALSE}
-dset$longitudinal %>%
-    filter(cohort %in% c("F2007", "T2000")) %>%
-    pull(female) %>%
-    summary
-```
-
 
 ## Characteristics
 
@@ -144,67 +135,6 @@ characteristicsTableFull(dset$longitudinal) %>% mykable
 
 </details>
 
-## PCA
-
-Calculating PCA in crossectional sample
-
-```{r calculate PCA, fig.width=8, fig.height=20}
-pca.df <- dset$crosssectional %>%
-    myprcomp(.)
-```
-
-Associations between BP indices and PCA-axes.
-
-```{r pca axis}
-glm.pca <- loop.lm(dset = pca.df$axes,
-                   response = "sys",
-                   loops = c("PC001", "PC002"),
-                   covariates = ivars)
-```
-
-Significant results after FDR correction
-
-```{r pca results, echo = FALSE}
-loop.results(glm.pca, filterstr = "PC") %>%
-    dplyr::filter(qval < 0.05) %>%
-    betacip %>%
-    dplyr::select(response, term, mean_ci, p.value) %>%
-    myspread %>%
-    mykable
-```
-
-
-### PCA with systolic BP
-
-```{r PCA, echo = FALSE}
-ggsave(file = "cache/pca.png",
-       plot = pca.plot(pca.df),
-       height = 3.5,
-       width = 5.0,
-       dpi = 300,
-       unit = "in")
-```
-
-<img src="cache/pca.png" />
-
-<details><summary>Contribution of variables in main PCA axes</summary>
-
-```{r Top contributors, echo = FALSE}
-df.loading <- pca.df$loading %>%
-    mutate(axisorder = PC1,
-           nmrname = bioproperty(rowname),
-           nmrgroup = bioproperty(rowname, "group")) %>% 
-    dplyr::select(PC1, PC2, nmrname, nmrgroup)
-
-arrangeGrob(grobs = lapply(c2l("PC1", "PC2"), function(x) df.loading %>% pca.loading(axis = x)),
-            labels = c("A", "B"),
-            ncol = 2) %>%
-    ggsave(file = "cache/pca-proportion.png", plot = .,  height = 8, width = 8, dpi = 300)
-```
-
-<img src = "cache/pca-proportion.png" />
-
-</details>
 
 ## Cross-sectional associations
 
@@ -214,15 +144,15 @@ arrangeGrob(grobs = lapply(c2l("PC1", "PC2"), function(x) df.loading %>% pca.loa
 glm.sys <- loop.lm(dset$crosssectional, "sys", metabolites, ivars)
 glm.dias <- loop.lm(dset$crosssectional, "dias", metabolites, ivars)
 glm.htn <- loop.binomial(dset$crosssectional, "htn", metabolites, ivars)
-glm <- loop.results(glm.sys, glm.dias, glm.htn)
+results.crosssectional <- loop.results(glm.sys, glm.dias, glm.htn)
 ```
 
 <details><summary>Logistic model</summary>
 
 ```{r ggforestplot for logistic models,  results = 'hide', echo = FALSE}
-myforestplot(glm,
+myforestplot(results.crosssectional,
              xlim = c(0.7, 1.5),
-             dims = c(18, 21),
+             dims = c(18, 23),
              logodds = TRUE,
              responses = c("htn"),
              file = "cache/glmforest-crosssectional-htn.png")
@@ -235,8 +165,9 @@ myforestplot(glm,
 <details><summary>Linear models</summary>
 
 ```{r ggforestplot for linear models,  results = 'hide', echo = FALSE}
-myforestplot(glm,
+myforestplot(results.crosssectional,
              xlim = c(-2, 3),
+             dims = c(18, 23),
              responses = c("sys", "dias"),
              file = "cache/glmforest-crosssectional-bp.png")
 ```
@@ -245,20 +176,36 @@ myforestplot(glm,
 
 </details>
 
+<details><summary>Lipoprotein subclasses</summary>
+
+
+```{r ggforestplot for linear model subclasses,  results = 'hide', echo = FALSE}
+myforestplot(results.crosssectional,
+             xlim = c(-2, 6),
+             dims = c(18, 33),
+             responses = c("sys", "dias"),
+             panelone = c("Very low-density lipoprotein",
+                          "Intermediate-density lipoprotein"),
+             paneltwo = c("Low-density lipoprotein",
+                          "High-density lipoprotein",
+                          "General lipoprotein subclasses"),
+             preprocess = subclasspreprocess,
+             file = "cache/glmforest-crosssectional-liposubclasses-bp.png")
+```
+
+<img src = "cache/glmforest-crosssectional-liposubclasses-bp.png" />
+
+</details>
+
 <details><summary>Residuals</summary>
 
 ```{r residuals, fig.width=8, fig.height=20, echo = FALSE}
 ggsave(file="cache/glmforest-crosssectional-residuals-sys.png",
        arrangeGrob(grobs = loop.residuals(glm.sys), ncol = 4),
-       height = 20,
+       height = 49,
        width = 8,
        dpi = 300,
        unit = "in")
-```
-
-```{r residuals testing, include = FALSE}
-par(mfrow=c(2,2))
-glm.sys[[20]] %>% plot
 ```
 
 <img src="cache/glmforest-crosssectional-residuals-sys.png" />
@@ -266,7 +213,7 @@ glm.sys[[20]] %>% plot
 ```{r longitudinal qq, echo = FALSE}
 ggsave(file = "cache/glmforest-crosssectional-htn-qq.png",
        plot = grid.arrange(grobs = loop.qq(glm.htn), ncol = 4),
-       height = 20,
+       height = 49,
        width = 8,
        dpi = 300,
        unit = "in")
@@ -279,9 +226,8 @@ ggsave(file = "cache/glmforest-crosssectional-htn-qq.png",
 <details><summary>Numerical values</summary>
 
 ```{r ggforestplot numeric values, echo = FALSE}
-glm %>% 
+results.crosssectional %>% 
     results.table %>%
-    select("term", "htn_mean_ci", "htn_p.value", "sys_mean_ci", "sys_p.value", "dias_mean_ci", "dias_p.value") %>%
     mykable
 ```
 
@@ -308,6 +254,7 @@ glm.age <- loop.results(glm.age.young, glm.age.old)
 ```{r ggforestplot crosssectional age model, echo = FALSE}
 myforestplot(glm.age,
              xlim = c(0.7, 1.5),
+             dims = c(18, 23),
              logodds = TRUE,
              scale = agescale,
              responses = c("old", "young"),
@@ -349,6 +296,7 @@ glm.sex <- loop.results(glm.sex.male, glm.sex.female)
 ```{r ggforestplot crosssectional sex model, echo = FALSE}
 myforestplot(glm.sex,
              xlim = c(0.7, 1.5),
+             dims = c(18, 23),
              logodds = TRUE,
              scale = sexscale,
              responses = c("sexfemale", "sexmale"),
@@ -366,8 +314,6 @@ Numerical values
 ```{r ggforestplot sex diff numeric values, echo = FALSE}
 glm.sex %>% 
     results.table %>%
-    flextable
-
     mykable
 ```
 
@@ -389,10 +335,10 @@ glm.compare <- dset$crosssectional %>%
 ```{r comparing crosssectional samples plot, echo = FALSE}
 myforestplot(glm.compare,
              xlim = c(0.4, 2.5),
+             dims = c(18, 23),
              logodds = TRUE,
              responses = c("1997", "2002", "2007", "2012", "T2000"),
              file = "cache/glmforest-crosssectional-cohort.png",
-             dims = c(18, 21),
              scale = cohortscale)
 ```
 
@@ -403,34 +349,17 @@ myforestplot(glm.compare,
 ## Longitudinal set
 
 ```{r longitudinal model}
-glm.longitudinal.sys <- loop.lm(getincidental(dset$longitudinal),
-                                "sys.followup",
-                                metabolites,
-                                ivars %union% "sys")
-
-glm.longitudinal.htn <- loop.binomial(getincidental(dset$longitudinal, keephypertensive = FALSE),
-                                "htn.followup",
-                                metabolites,
-                                ivars %union% "sys" %difference% "bptreat")
+glm.longitudinal.sys <- loop.lm(dset = getincidental(dset$longitudinal),
+                                response = "sys.followup",
+                                loops = metabolites,
+                                covariates = ivars %union% "sys")
 ```
 
 <details><summary>Numerical values for systole</summary>
 
 ```{r longitudinal model numerical results sys, echo = FALSE}
-( results.longitudinal.sys <- loop.results(glm.longitudinal.sys) ) %>%
+( results.longitudinal <- loop.results(glm.longitudinal.sys) ) %>%
     results.table %>%
-    flextable
-
-    mykable    
-```
-
-</details>
-
-<details><summary>Numerical values for incidental hypertension</summary>
-
-```{r longitudinal model numerical results htn, echo = FALSE}
-( results.longitudinal.htn <- loop.results(glm.longitudinal.htn) ) %>%
-    results.table  %>%
     mykable    
 ```
 
@@ -439,11 +368,11 @@ glm.longitudinal.htn <- loop.binomial(getincidental(dset$longitudinal, keephyper
 <details><summary>Plot systole</summary>
 
 ```{r ggforestplot for incidental model all }
-myforestplot(results.longitudinal.sys,
+myforestplot(results.longitudinal,
              responses = "sys.followup",
              logodds = FALSE,
              xlim = c(-2, 3),
-             dims = c(18, 21),
+             dims = c(18, 23),
              file = "cache/glmforest-longitudinal-sys.png")
 ```
 
@@ -451,30 +380,33 @@ myforestplot(results.longitudinal.sys,
 
 </details>
 
+<details><summary>Lipoprotein subclasses</summary>
 
-<details><summary>Plot</summary>
 
-```{r ggforestplot for incidental hypertension }
-myforestplot(results.longitudinal.htn,
-             responses = "htn.followup",
-             logodds = TRUE,
-             xlim = c(0.6, 1.5),
-             dims = c(18, 21),
-             file = "cache/glmforest-longitudinal-htn.png")
+```{r ggforestplot for longitudinal model subclasses,  results = 'hide', echo = FALSE}
+myforestplot(results.longitudinal %>% filter(std.error < 10000),
+             xlim = c(-2, 2),
+             dims = c(18, 28),
+             responses = "sys.followup",
+             panelone = c("Very low-density lipoprotein",
+                          "Intermediate-density lipoprotein"),
+             paneltwo = c("Low-density lipoprotein",
+                          "High-density lipoprotein",
+                          "General lipoprotein subclasses"),
+             preprocess = subclasspreprocess,
+             file = "cache/glmforest-longitudinal-liposubclasses-bp.png")
 ```
 
-<img src = "cache/glmforest-longitudinal-htn.png" />
+<img src = "cache/glmforest-crosssectional-liposubclasses-bp.png" />
 
 </details>
-
-
 
 <details><summary>Residuals systole</summary>
 
 ```{r longitudinal residuals sys, echo = FALSE}
 ggsave(file = "cache/residuals-longitudinal-sys.png",
        plot = grid.arrange(grobs = loop.residuals(glm.longitudinal.sys), ncol = 4),
-       height = 20,
+       height = 49,
        width = 8,
        dpi = 300,
        unit = "in")
@@ -485,7 +417,7 @@ ggsave(file = "cache/residuals-longitudinal-sys.png",
 ```{r longitudinal qq sys, echo = FALSE}
 ggsave(file = "cache/qq-longitudinal-sys.png",
        plot = grid.arrange(grobs = loop.qq(glm.longitudinal.sys), ncol = 4),
-       height = 20,
+       height = 49,
        width = 8,
        dpi = 300,
        unit = "in")
@@ -495,50 +427,69 @@ ggsave(file = "cache/qq-longitudinal-sys.png",
 
 </details>
 
-<details><summary>Residuals hypertension</summary>
+## Meta-analyses for main results
 
-```{r longitudinal residuals, echo = FALSE}
-ggsave(file = "cache/residuals-longitudinal-htn.png",
-       plot = grid.arrange(grobs = loop.residuals(glm.longitudinal.htn), ncol = 4),
-       height = 20,
-       width = 8,
-       dpi = 300,
-       unit = "in")
+### Cross-sectional
+
+
+```{r meta-analysis for cross-sectional}
+glm.meta.sys <- loop.rma(dset = dset$crosssectional,
+                         response = "sys",
+                         loops = metabolites,
+                         covariates = ivars %difference% "cohort") %>%
+    loop.results(usemodelterm = TRUE) %>%
+    mutate(response = "sys")
+
+glm.meta.dias <- loop.rma(dset = dset$crosssectional,
+                         response = "dias",
+                         loops = metabolites,
+                         covariates = ivars %difference% "cohort") %>%
+    loop.results(usemodelterm = TRUE) %>%
+    mutate(response = "dias")
+
+glm.meta <- rbind(glm.meta.sys, glm.meta.dias)
 ```
 
-<img src = "cache/residuals-longitudinal-htn.png" />
+<details><summary>Linear models</summary>
 
-```{r longitudinal qq htn, echo = FALSE}
-ggsave(file = "cache/qq-longitudinal-htn.png",
-       plot = grid.arrange(grobs = loop.qq(glm.longitudinal.htn), ncol = 4),
-       height = 20,
-       width = 8,
-       dpi = 300,
-       unit = "in")
+```{r ggforestplot for linear meta-analysis models,  results = 'hide', echo = FALSE}
+myforestplot(glm.meta,
+             xlim = c(-2, 3),
+             dims = c(18, 23),
+             responses = c("sys", "dias"),
+             file = "cache/glmforest-crosssectional-bp-meta.png")
 ```
 
-<img src = "cache/qq-longitudinal-htn.png" />
-
+<img src="cache/glmforest-crosssectional-bp-meta.png" />
 
 </details>
 
-<details><summary>Comparing results per cohort</summary>
 
-```{r comparing longitudinal results, echo = FALSE}
-lapply(c2l("F2007", "T2000"), function(x) 
-    loop.binomial(getincidental(dset$longitudinal, keephypertensive = FALSE) %>%
-                  filter(cohort == x) %>%
-                  rename(!!quo_name(x) := htn.followup),
-                  x,
-                  metabolites,
-                  ivars %union% "sys" %difference% c("cohort", "bptreat")) %>%
-    loop.results) %>%
-    map_df(~.x, .id = "model") %>%
-    results.table %>%
-    mykable
+### Longitudinal
+
+```{r meta-analysis for longitudinal}
+glm.longitudinal.meta.sys <- loop.rma(dset = getincidental(dset$longitudinal),
+                                      response = "sys.followup",
+                                      loops = metabolites,
+                                      covariates = ivars %union% "sys" %difference% "cohort") %>%
+    loop.results(usemodelterm = TRUE) %>%
+    mutate(response = "sys.followup")
 ```
 
+<details><summary>Linear models</summary>
+
+```{r ggforestplot for longitudinal models,  results = 'hide', echo = FALSE}
+myforestplot(glm.longitudinal.meta.sys,
+             xlim = c(-2, 3),
+             dims = c(18, 23),
+             responses = "sys.followup",
+             file = "cache/glmforest-longitudinal-sys-meta.png")
+```
+
+<img src="cache/glmforest-longitudinal-sys-meta.png" />
+
 </details>
+
 
 # Supplement
 
@@ -560,10 +511,3 @@ lapply(c2l(metabolites), function(x)
 ```
 
 </details>
-  
-```{r save R image,  include = FALSE, eval = FALSE}
-if (exists("rmdgeneration")) {
-    rm(rmdgeneration)
-}
-save.image(file = paste0("session/session-", now, ".Rdata"))
-```

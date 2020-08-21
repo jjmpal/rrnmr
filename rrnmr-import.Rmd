@@ -81,25 +81,19 @@ vars <- c("age", "bmi", "bptreat", "cohort", "diabetes", "dias",
           "smoker", "sys")
 ```
 
-Excluded metabolites
+Excluding absolute measures for fatty acids and percentage measures
+for relative lipoprotein lipid concentrations.
 
 ```{r Metabolites}
-exclude.metabolites <- excludemetabolites(byname = c("NMR_HDL2_C",
-                                                     "NMR_HDL3_C",
-                                                     "NMR_ApoB_by_ApoA1",
-                                                     "NMR_TG_by_PG",
-                                                     "NMR_Free_C",
-                                                     "NMR_Esterified_C",
-                                                     "NMR_Remnant_C",
-                                                     "NMR_DHA",
-                                                     "NMR_LA",
-                                                     "NMR_MUFA",
-                                                     "NMR_Omega_3",
-                                                     "NMR_Omega_6",
-                                                     "NMR_PUFA",
-                                                     "NMR_SFA"),
-                                          bygroup = c("Relative lipoprotein lipid concentrations",
-                                                      "Lipoprotein subclasses"))
+exclude.metabolites <- excludemetabolites(byname = c("NMR_XXL_VLDL_C", # Missing for H2000
+                                                     "NMR_DHA", # keeping pct
+                                                     "NMR_LA",  # keeping pct
+                                                     "NMR_MUFA", # keeping pct
+                                                     "NMR_Omega_3", # keeping pct
+                                                     "NMR_Omega_6", # keeping pct
+                                                     "NMR_PUFA", # keeping pct
+                                                     "NMR_SFA"), # keeping pct
+                                          bygroup = c("Relative lipoprotein lipid concentrations"))
 ```
 
 <details>

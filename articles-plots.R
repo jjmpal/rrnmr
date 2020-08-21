@@ -6,9 +6,9 @@ myforestplot <- function(dset,
                                       "Lipoprotein particle sizes",
                                       "Apolipoproteins",
                                       "Fatty acids",
-                                      "Glycerides and phospholipids"),
-                         paneltwo = c("Fluid balance",
-                                      "Glycolysis related metabolites",
+                                      "Glycolysis related metabolites"),
+                         paneltwo = c("Glycerides and phospholipids",
+                                      "Fluid balance",
                                       "Ketone bodies",
                                       "Amino acids",
                                       "Inflammation"),
@@ -16,22 +16,11 @@ myforestplot <- function(dset,
                          dims = c(18, 22),
                          percentage = FALSE,
                          scale = bpscale,
-                         ignore = c("NMR_DHA",
-                                    "NMR_LA",
-                                    "NMR_MUFA",
-                                    "NMR_Omega_3",
-                                    "NMR_Omega_6",
-                                    "NMR_PUFA",
-                                    "NMR_SFA")) {
+                         preprocess = forestplotpreprocess) {
     stopifnot(!missing(responses), !missing(file))
     stopifnot(responses %in% unique(dset$response))
     
-    df.metadata <- dset %>%
-        mutate(nmrname = bioproperty(term),
-               nmrgroup = bioproperty(term, "group")) %>%
-        filter(response %in% responses, !term %in% ignore) %>%
-        arrange(nmrgroup)
-
+    df.metadata <- preprocess(dset, responses)
     groups <- df.metadata %>% pull(nmrgroup) %>% unique
 
     ggplot_multi <- myforest.loopgroups(df.metadata,
@@ -52,8 +41,40 @@ myforestplot <- function(dset,
     ggsave(file = file, plot = ag, width = dims[1], height = dims[2], dpi = 300, unit = "cm")
 }
 
+forestplotpreprocess <- function(dset, responses) {
+    dset %>%
+        mutate(nmrname = bioproperty(term),
+               nmrgroup = bioproperty(term, "group")) %>%
+        filter(response %in% responses) %>%
+        arrange(nmrgroup)
+}
+
+
+subclasspreprocess <- function(dset, responses) {    
+    dset %>%
+        mutate(nmrname = bioproperty(term, length = 0),
+               nmrgroup = bioproperty(term, "group")) %>%
+        filter(response %in% responses, nmrgroup == "Lipoprotein subclasses") %>%
+        mutate(nmrgroup = case_when(grepl("IDL", nmrname) ~ "Intermediate-density lipoprotein",
+                                 grepl("VLDL", nmrname) ~ "Very low-density lipoprotein",
+                                 grepl("LDL", nmrname) ~ "Low-density lipoprotein",
+                                 grepl("HDL", nmrname) ~ "High-density lipoprotein",
+                                 TRUE ~ "General lipoprotein subclasses"))
+}
+
+forestorder <- function(list, sizelevels = c("XXL","XL", "L", "M", "IDL", "S", "XS", "XXS")) {
+    data.frame(name = list) %>%
+        mutate(level = gsub("-.*", "", name),
+               found = level %in% sizelevels,
+               level = factor(ifelse(found, level, "custom"),
+                              levels = "custom" %union% sizelevels)) %>%
+        arrange(level, name) %>%
+        pull(name) %>%
+        as.character
+}
+
 forest.customorder <- function(x) {
-    c("Total cholesterol",
+    ret <- c("Total cholesterol",
       "VLDL cholesterol",
       "LDL cholesterol",
       "HDL cholesterol",
@@ -66,10 +87,11 @@ forest.customorder <- function(x) {
       "LDL size",
       "HDL size",
       "Total fatty acids",
-      sort(x)) %>%
-        unique %intersect%
-        x %>%
-        rev
+      forestorder(x)) %>%
+        unique %intersect% x %>%
+      rev
+    message(paste(ret, collapse = ","))
+    ret
 }
 
 forest.order.and.scale <- function(df, groups, heightadj) {

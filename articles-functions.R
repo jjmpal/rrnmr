@@ -27,22 +27,24 @@ betacip <- function(df,
 }
 
 format.estimate_ci <- function(estimate, conf.low, conf.high, percent = FALSE) {
-    if(percent) sprintf("%.1f%% (%.1f–%.1f%%)",  estimate*100, conf.low*100, conf.high*100)
-    else sprintf("%.2f (%.2f–%.2f)", estimate, conf.low, conf.high)
+    if(percent) sprintf("%.1f%% (%.1f to %.1f%%)",  estimate*100, conf.low*100, conf.high*100)
+    else sprintf("%.2f (%.2f to %.2f)", estimate, conf.low, conf.high)
 }
 
 standardnames <- function(x, prefix = "NMR_") {
     toupper(paste0(prefix, gsub("[/-]", "_", x)))
 }
 
-bioproperty <- function(metabolites, property = "name") {
+bioproperty <- function(metabolites, property = "name", length = 24) {
     md <- as.data.frame(ggforestplot::df_NG_biomarker_metadata) 
     metabolites %>%
         purrr::map_chr(function(id) {
             id <- gsub("NMR_", "", id)
             names <- md %>% filter(machine_readable_name == id)
             if (property == "name")
-                return(descriptivenames(names$abbreviation[1], names$description[1]))
+                return(descriptivenames(names$abbreviation[1],
+                                        names$description[1],
+                                        length = length))
             else
                 return(names[[property]][1])
         })

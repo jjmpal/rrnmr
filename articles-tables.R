@@ -135,13 +135,16 @@ smalloddsratiotable <- function(df, modelresbp, modelreshtn, regularisation, htn
 #        flextable::width(j = c(4:5, 7:8), width = 1.3)
 }
 
+
 myspread <- function(ret, list = c2l("mean_ci", "p.value"), key = "response", by = "term") {
+    keys <- unique(ret[[key]])
+    columns <- lapply(keys, function(x) paste0(x, "_", list))  %>% unlist
     lapply(list, function(x) ret %>%
                              dplyr::select(term, key, x) %>%
                              tidyr::spread(key, x) %>%
                              dplyr::rename_at(vars(-term), ~paste0(., "_", x))) %>%
-        purrr::reduce(full_join, by = by)  %>%
-        dplyr::select(term, noquote(order(colnames(.))))
+        purrr::reduce(full_join, by = by) %>%
+        dplyr::select(one_of(by %union% columns))
 }
 
 
