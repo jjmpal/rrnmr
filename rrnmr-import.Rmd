@@ -42,6 +42,7 @@ library(ggpubr)
 library(purrr)
 library(ggforestplot)
 library(xfun)
+library(forcats)
 ```
 
 </details>
@@ -92,7 +93,21 @@ exclude.metabolites <- excludemetabolites(byname = c("NMR_XXL_VLDL_C", # Missing
                                                      "NMR_Omega_3", # keeping pct
                                                      "NMR_Omega_6", # keeping pct
                                                      "NMR_PUFA", # keeping pct
-                                                     "NMR_SFA"), # keeping pct
+                                                     "NMR_SFA", # keeping pct
+                                                     "NMR_XXL_VLDL_P", # only available in FR97
+                                                     "NMR_XL_VLDL_P", # only available in FR97
+                                                     "NMR_L_VLDL_P", # only available in FR97
+                                                     "NMR_M_VLDL_P", # only available in FR97
+                                                     "NMR_S_VLDL_P", # only available in FR97
+                                                     "NMR_XS_VLDL_P", # only available in FR97
+                                                     "NMR_IDL_P", # only available in FR97
+                                                     "NMR_L_LDL_P", # only available in FR97
+                                                     "NMR_M_LDL_P", # only available in FR97
+                                                     "NMR_S_LDL_P", # only available in FR97
+                                                     "NMR_XL_HDL_P", # only available in FR97
+                                                     "NMR_L_HDL_P", # only available in FR97
+                                                     "NMR_M_HDL_P", # only available in FR97
+                                                     "NMR_S_HDL_P"), # only available in FR97
                                           bygroup = c("Relative lipoprotein lipid concentrations"))
 ```
 
@@ -106,6 +121,23 @@ data.frame(metabolite = exclude.metabolites) %>%
 ```
 
 </details>
+
+# Missing Particle concentrations
+
+```{r missing particle concentrations}
+c("T2000" = "nmrdata/T20xx/T2000-nmr.sas7bdat",
+  "FR97" = "nmrdata/FR-NMR/nmr_fr97.sas7bdat",
+  "FR02" = "nmrdata/FR-NMR/nmr_fr02.sas7bdat",
+  "FR07" = "nmrdata/FR-NMR/nmr_fr07.sas7bdat",
+  "FR12" = "nmrdata/FR-NMR/nmr_fr12.sas7bdat",
+  "FR17" = "nmrdata/FR-NMR/nmr_ft17.sas7bdat") %>%
+    purrr::map(my_read_nmr) %>%
+    map_df(., ~.x, .id = "cohort") %>%
+    group_by(cohort) %>%
+    select(ends_with("_P")) %>%
+    summarize_all(~max(.x, na.rm = TRUE)) %>%
+    mykable
+```
 
 # Cross-sectional sample
 
@@ -151,6 +183,7 @@ we exclude all but the latest one.
 
 ```{r crossectional missing values}
 dset.crosssectional.raw <- dset.finrisk.pheno %>%
+    mutate(sampleid = sprintf("%s_%s", VUOSI, HAVTUN)) %>%
     remove_reexamined %>%
     FR_definitions(variables = vars) %>%
     full_join(., dset.finrisk.nmr, by = "sampleid") %>%
@@ -167,7 +200,7 @@ Missing values
 missingbycohort(dset.crosssectional.raw, vars) %>% mykable
 ```
 
-Metabolite values bofre normalization
+Metabolite values before normalization
 
 ```{r cross sectional nmr table, echo = FALSE}
 dset.crosssectional.raw %>% select(starts_with("NMR_")) %>% mydescribe %>% mykable
@@ -317,9 +350,9 @@ Excluding participants with missing values and those with missing baseline-follo
 
 ```{r longitudinal finalizing}
 dset.longitudinal <- dset.longitudinal.raw %>%
-    filter_at(vars(starts_with("NMR")), any_vars(!is.na(.))) %>%
-    mutate_at(vars(starts_with("NMR")), ~scale(.)) %>%
-    mutate(agegroup = factor(ifelse(age < median(age), "young", "old"))) %>%
+    filter_at(.vars = vars(vars), all_vars(!is.na(.))) %>%
+    scale_and_filter_nmr %>%
+    mutate(cohort = as.factor(cohort)) %>%
     cleanlongitudinal()
 ```
 

@@ -35,8 +35,14 @@ standardnames <- function(x, prefix = "NMR_") {
     toupper(paste0(prefix, gsub("[/-]", "_", x)))
 }
 
-bioproperty <- function(metabolites, property = "name", length = 24) {
-    md <- as.data.frame(ggforestplot::df_NG_biomarker_metadata) 
+bioproperty <- function(metabolites, property = "name", length = 26) {
+    md <- as.data.frame(ggforestplot::df_NG_biomarker_metadata) %>%
+        mutate(description = case_when(description == "Isoleucine" ~ "Isoleucine (branched)",
+                                       description == "Leucine" ~ "Leucine (branched)",
+                                       description == "Valine" ~ "Valine (branched)",
+                                       description == "Phenylalanine" ~ "Phenylalanine (aromatic)",
+                                       description == "Tyrosine" ~ "Tyrosine (aromatic)",
+                                       TRUE ~ description))
     metabolites %>%
         purrr::map_chr(function(id) {
             id <- gsub("NMR_", "", id)
@@ -93,4 +99,29 @@ cleanlongitudinal <- function(df) {
 dropattributes <- function(x) {
     attributes(x) <- NULL
     x
+}
+
+getsubclasses <- function(list) {
+    data.frame(term = list) %>%
+        mutate(group = bioproperty(term, "group")) %>%
+        filter(group == "Lipoprotein subclasses") %>%
+        pull(term)
+}
+
+mkdir <- function(...) {
+    vmkdir <- Vectorize(dir.create, vectorize.args = "path")
+    vmkdir(path = c(...), showWarnings = FALSE) %>%
+        invisible
+}
+
+rmdir <- function(...) {
+    vrmdir <- Vectorize(unlink, vectorize.args = "x")
+    vrmdir(x = c(...), recursive=TRUE) %>%
+        invisible
+}
+
+submodel <- function(dset, filter, newname, oldname) {
+    dset %>%
+        dplyr::filter(!!enquo(filter)) %>%
+        dplyr::rename(!!enquo(newname) := !!enquo(oldname))
 }

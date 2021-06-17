@@ -8,15 +8,8 @@ output:
 ---
 
 ```{r options, include=FALSE}
-knitr::opts_chunk$set(include = TRUE, echo = TRUE, message = FALSE, results='asis', cache=FALSE, warning=FALSE)
+knitr::opts_chunk$set(include = TRUE, echo = TRUE, message = FALSE, results='asis', cache = FALSE, warning=FALSE, error = FALSE)
 options(knitr.kable.NA = "")
-now <- format(Sys.time(), '%Y%m%d-%H%M%S')
-```
-
-```{r Command line arguments, include = FALSE, eval = FALSE}
-file <- paste0("session/", sort(list.files("session"), decreasing = TRUE)[1])
-message("Loading variables from file ", file)
-load(file)
 ```
 
 # Libraries
@@ -33,7 +26,6 @@ library(broom)
 # MODELING
 library(dplyr)
 library(parallel)
-library(doMC)
 library(officer)
 library(flextable)
 library(lme4)
@@ -76,6 +68,7 @@ library(pROC)
 library(stargazer)
 library(nricens)
 library(metafor)
+library(psych)
 ```
 
 </details>
@@ -103,6 +96,13 @@ xfun::embed_files(c("rrnmr.Rmd", sourcefiles))
 
 </details>
 
+#  Folder structure
+
+```{r clean folders}
+mkdir("cache", "report", "session")
+```
+
+
 # Definitions
 
 ```{r definitions}
@@ -113,13 +113,16 @@ ivars <- c("age", "female", "bmi", "smoker", "diabetes", "leisure", "bptreat", "
 # Data import
 
 ```{r import raw data}
-dset <- readRDS("rds/dset-20200820-184513.rds")
+dset <- readRDS("rds/dset-20210217-102531.rds")
 metabolites <- getmetabolites(dset$crosssectional)
+metabolites.subclass <- getsubclasses(metabolites)
 ```
 
 ## Characteristics
 
 <details><summary>Cross-sectional sample</summary>
+
+Median age is `r median(dset$crosssectional$age)`.
 
 ```{r tableone cross-sectional, echo = FALSE}
 characteristicsTableFull(dset$crosssectional, test = TRUE) %>% mykable
@@ -129,12 +132,110 @@ characteristicsTableFull(dset$crosssectional, test = TRUE) %>% mykable
 
 <details><summary>Longitudinal sample</summary>
 
+At baseline
+
+```{r tableone longitudinal baseline, echo = FALSE}
+dset$longitudinal %>%
+    filter(cohort %in% c("F2007", "T2000")) %>%
+    characteristicsTable %>%
+    mykable
+```
+
+Both
+
 ```{r tableone longitudinal, echo = FALSE}
-characteristicsTableFull(dset$longitudinal) %>% mykable
+characteristicsTable(dset$longitudinal, "cohort") %>% mykable
 ```
 
 </details>
 
+
+## Correlation matrix
+
+<details><summary>Correlation matrix</summary>
+
+```{r heatmap for supplement, echo = FALSE}
+lipoproteins_for_correlation_matrix <- tibble(id = metabolites,
+                                              desc = bioproperty(id, length = 100),
+                                              group = bioproperty(id, "group")) %>%
+    filter(group != "Lipoprotein subclasses") %>%
+    mutate(group_name = id)
+
+spearman_correlation_matrix <- correlationmatrix(dset$crosssectional,
+                                                 lipoproteins_for_correlation_matrix,
+                                                 method = "spearman",
+                                                 adjust = "fdr")
+
+pheatmap::pheatmap(spearman_correlation_matrix[["r"]],
+                   display_numbers = ifelse(spearman_correlation_matrix[["p"]] < 0.05, "", "×"),
+                   fontsize = 6,
+                   fontsize_row = 6,
+                   fontsize_col = 5,
+                   fontsize_number = 10,
+                   cutree_rows = 6,
+                   cutree_cols = 6,
+                   labels_row = lipoproteins_for_correlation_matrix$desc,
+                   labels_col = lipoproteins_for_correlation_matrix$group,
+                   cellwidth = 6,
+                   cellheight = 6,
+                   angle_col = 45,
+                   treeheight_col = 0,
+                   silent = TRUE,
+                   legend_breaks = c(-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1)) %>%
+ggsave(file = "cache/crosssectional-correlationmatrix.png",
+           plot = .,
+           height = 5.6,
+           width = 8,
+           dpi = 300,
+           unit = "in")
+```
+
+<img src = "cache/crosssectional-correlationmatrix.png" />
+
+</details>
+
+<details><summary>Correlation matrix lipoprotein subclasses</summary>
+
+```{r lipoprotein subclasses heatmap for supplement, echo = FALSE}
+lipoproteins_for_correlation_matrix_subclass <- tibble(id = metabolites,
+                                                       desc = bioproperty(id, length = 100),
+                                                       name = bioproperty(id, property = "abbreviation", length = 100),
+                                                       group = bioproperty(id, "group")) %>%
+    filter(group == "Lipoprotein subclasses") %>%
+    mutate(group_name = id)
+
+spearman_correlation_matrix_subclass <- correlationmatrix(dset$crosssectional,
+                                                          lipoproteins_for_correlation_matrix_subclass,
+                                                          method = "spearman",
+                                                          adjust = "fdr")
+
+pheatmap::pheatmap(spearman_correlation_matrix_subclass[["r"]],
+                                     display_numbers = ifelse(spearman_correlation_matrix_subclass[["p"]] < 0.05, "", "×"),
+                                     fontsize = 6,
+                                     fontsize_row = 6,
+                                     fontsize_col = 5,
+                                     fontsize_number = 10,
+                                     cutree_rows = 4,
+                                     cutree_cols = 4,
+                                     labels_row = lipoproteins_for_correlation_matrix_subclass$name,
+                                     labels_col = lipoproteins_for_correlation_matrix_subclass$desc,
+                                     cellwidth = 6,
+                                     cellheight = 6,
+                                     angle_col = 45,
+                                     treeheight_col = 0,
+                                     silent = TRUE,
+                                     legend_breaks = c(-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1)) %>%
+                   ggsave(file = "cache/crosssectional-correlationmatrix-subclass.png",
+                          plot = .,
+                          height = 8.7,
+                          width = 8.9,
+                          dpi = 300,
+                          unit = "in")
+```
+
+<img src = "cache/crosssectional-correlationmatrix-subclass.png" />
+
+</details>
 
 ## Cross-sectional associations
 
@@ -147,9 +248,9 @@ glm.htn <- loop.binomial(dset$crosssectional, "htn", metabolites, ivars)
 results.crosssectional <- loop.results(glm.sys, glm.dias, glm.htn)
 ```
 
-<details><summary>Logistic model</summary>
+q<details><summary>Logistic model</summary>
 
-```{r ggforestplot for logistic models,  results = 'hide', echo = FALSE}
+```{r ggforestplot for logistic models, echo = FALSE}
 myforestplot(results.crosssectional,
              xlim = c(0.7, 1.5),
              dims = c(18, 23),
@@ -164,7 +265,7 @@ myforestplot(results.crosssectional,
 
 <details><summary>Linear models</summary>
 
-```{r ggforestplot for linear models,  results = 'hide', echo = FALSE}
+```{r ggforestplot for linear models, echo = FALSE}
 myforestplot(results.crosssectional,
              xlim = c(-2, 3),
              dims = c(18, 23),
@@ -176,13 +277,34 @@ myforestplot(results.crosssectional,
 
 </details>
 
+<details><summary>Lipoprotein subclasses histogram</summary>
+
+```{r density plot subcalsses crosssectional, echo = FALSE}
+{ dset$crosssectional %>%
+      gather(Metabolite, Value, colnames(dset$crosssectional) %>% mygrep(word = "NMR_.*_.*DL_.*")) %>%
+      ggplot(aes(x = Value, col = htn)) +
+      facet_wrap(~Metabolite, ncol=5) +
+      geom_histogram(binwidth = 1) +
+      scale_y_continuous(trans='log10') } %>%
+    ggsave(file = "cache/crosssectional-subclasses-densityplot.png",
+           plot = .,
+           height = 16,
+           width = 12,
+           dpi = 300,
+           unit = "in")
+```
+
+<img src = "cache/crosssectional-subclasses-densityplot.png" />
+
+</details>
+
 <details><summary>Lipoprotein subclasses</summary>
 
-
-```{r ggforestplot for linear model subclasses,  results = 'hide', echo = FALSE}
+```{r ggforestplot for linear model subclasses, echo = FALSE}
 myforestplot(results.crosssectional,
              xlim = c(-2, 6),
-             dims = c(18, 33),
+             dims = c(18, 30),
+             legend.position = "bottom",
              responses = c("sys", "dias"),
              panelone = c("Very low-density lipoprotein",
                           "Intermediate-density lipoprotein"),
@@ -195,31 +317,37 @@ myforestplot(results.crosssectional,
 
 <img src = "cache/glmforest-crosssectional-liposubclasses-bp.png" />
 
+```{r ggforestplot for logistic model subclasses, echo = FALSE}
+myforestplot(results.crosssectional,
+             xlim = c(0.7, 1.5),
+             dims = c(18, 28),
+             logodds = TRUE,
+             responses = c("htn"),
+             panelone = c("Very low-density lipoprotein",
+                          "Intermediate-density lipoprotein"),
+             paneltwo = c("Low-density lipoprotein",
+                          "High-density lipoprotein",
+                          "General lipoprotein subclasses"),
+             preprocess = subclasspreprocess,
+             file = "cache/glmforest-crosssectional-liposubclasses-htn.png")
+```
+
+<img src = "cache/glmforest-crosssectional-liposubclasses-htn.png" />
+
 </details>
 
 <details><summary>Residuals</summary>
 
-```{r residuals, fig.width=8, fig.height=20, echo = FALSE}
+```{r residuals, echo = FALSE}
 ggsave(file="cache/glmforest-crosssectional-residuals-sys.png",
-       arrangeGrob(grobs = loop.residuals(glm.sys), ncol = 4),
-       height = 49,
-       width = 8,
+       arrangeGrob(grobs = loop.residuals(glm.sys, ignore = metabolites.subclass), ncol = 6),
+       height = 16,
+       width = 12,
        dpi = 300,
        unit = "in")
 ```
 
 <img src="cache/glmforest-crosssectional-residuals-sys.png" />
-
-```{r longitudinal qq, echo = FALSE}
-ggsave(file = "cache/glmforest-crosssectional-htn-qq.png",
-       plot = grid.arrange(grobs = loop.qq(glm.htn), ncol = 4),
-       height = 49,
-       width = 8,
-       dpi = 300,
-       unit = "in")
-```
-
-<img src = "cache/glmforest-crosssectional-htn-qq.png" />
 
 </details>
 
@@ -231,6 +359,19 @@ results.crosssectional %>%
     mykable
 ```
 
+```{r size of association, include = FALSE, eval = FALSE}
+results.crosssectional %>%
+    filter(response == "sys") %>%
+    filter(qval < 0.05) %>%
+    mutate(order = sign(estimate)) %>%
+    group_by(-order) %>%
+    summarise(estimate_median = median(estimate),
+              estimate_mean = mean(estimate),
+              estimate_sd = sd(estimate),
+              estimate_min = min(estimate),
+              estimate_max = max(estimate))
+```
+
 </details>
 
 ### Compare young and old
@@ -238,13 +379,13 @@ results.crosssectional %>%
 ```{r crosssectional young and old}
 glm.age.young <- dset$crosssectional %>%
     filter(agegroup == "young") %>%
-    rename(young = htn) %>%
-    loop.binomial(., "young", metabolites, ivars)
+    rename(htn.young = htn) %>%
+    loop.binomial(., "htn.young", metabolites, ivars)
 
 glm.age.old <- dset$crosssectional %>%
     filter(agegroup == "old") %>%
-    rename(old = htn) %>%
-    loop.binomial(., "old", metabolites, ivars)
+    rename(htn.old = htn) %>%
+    loop.binomial(., "htn.old", metabolites, ivars)
 
 glm.age <- loop.results(glm.age.young, glm.age.old)
 ```
@@ -257,7 +398,7 @@ myforestplot(glm.age,
              dims = c(18, 23),
              logodds = TRUE,
              scale = agescale,
-             responses = c("old", "young"),
+             responses = c("htn.old", "htn.young"),
              file = "cache/glmforest-crosssectional-age.png")
 ```
 
@@ -280,13 +421,13 @@ glm.age %>%
 ```{r crosssectional sex}
 glm.sex.female <- dset$crosssectional %>%
     filter(female == 1) %>%
-    rename(sexfemale = htn) %>%
-    loop.binomial(., "sexfemale", metabolites, ivars %difference% "female")
+    rename(htn.female = htn) %>%
+    loop.binomial(., "htn.female", metabolites, ivars %difference% "female")
 
 glm.sex.male <- dset$crosssectional %>%
     filter(female == 0) %>%
-    mutate(sexmale = htn) %>%
-    loop.binomial(., "sexmale", metabolites, ivars %difference% "female")
+    mutate(htn.male = htn) %>%
+    loop.binomial(., "htn.male", metabolites, ivars %difference% "female")
 
 glm.sex <- loop.results(glm.sex.male, glm.sex.female)
 ```
@@ -299,7 +440,7 @@ myforestplot(glm.sex,
              dims = c(18, 23),
              logodds = TRUE,
              scale = sexscale,
-             responses = c("sexfemale", "sexmale"),
+             responses = c("htn.female", "htn.male"),
              file = "cache/glmforest-crosssectional-sex.png")
 ```
 
@@ -380,11 +521,31 @@ myforestplot(results.longitudinal,
 
 </details>
 
+<details><summary>Lipoprotein subclasses histogram</summary>
+
+```{r density plot subcalsses longitudinal, echo = FALSE}
+{ getincidental(dset$longitudinal) %>%
+    gather(Metabolite, Value, colnames(dset$longitudinal) %>% mygrep(word = "NMR_.*_.*DL_.*")) %>%
+      ggplot(aes(x = Value, col = htn)) +
+      facet_wrap(~Metabolite, ncol=5) +
+      geom_histogram(binwidth = 1) +
+      scale_y_continuous(trans='log10') } %>%
+    ggsave(file = "cache/longitudinal-subclasses-densityplot.png",
+       plot = .,
+       height = 16,
+       width = 12,
+       dpi = 300,
+       unit = "in")
+```
+
+<img src = "cache/longitudinal-subclasses-densityplot.png" />
+
+</details>
+
 <details><summary>Lipoprotein subclasses</summary>
 
-
 ```{r ggforestplot for longitudinal model subclasses,  results = 'hide', echo = FALSE}
-myforestplot(results.longitudinal %>% filter(std.error < 10000),
+myforestplot(results.longitudinal,
              xlim = c(-2, 2),
              dims = c(18, 28),
              responses = "sys.followup",
@@ -397,7 +558,7 @@ myforestplot(results.longitudinal %>% filter(std.error < 10000),
              file = "cache/glmforest-longitudinal-liposubclasses-bp.png")
 ```
 
-<img src = "cache/glmforest-crosssectional-liposubclasses-bp.png" />
+<img src = "cache/glmforest-longitudinal-liposubclasses-bp.png" />
 
 </details>
 
@@ -405,9 +566,10 @@ myforestplot(results.longitudinal %>% filter(std.error < 10000),
 
 ```{r longitudinal residuals sys, echo = FALSE}
 ggsave(file = "cache/residuals-longitudinal-sys.png",
-       plot = grid.arrange(grobs = loop.residuals(glm.longitudinal.sys), ncol = 4),
-       height = 49,
-       width = 8,
+       plot = grid.arrange(grobs = loop.residuals(glm.longitudinal.sys, ignore = metabolites.subclass),
+                           ncol = 6),
+       height = 16,
+       width = 12,
        dpi = 300,
        unit = "in")
 ```
@@ -416,9 +578,10 @@ ggsave(file = "cache/residuals-longitudinal-sys.png",
 
 ```{r longitudinal qq sys, echo = FALSE}
 ggsave(file = "cache/qq-longitudinal-sys.png",
-       plot = grid.arrange(grobs = loop.qq(glm.longitudinal.sys), ncol = 4),
-       height = 49,
-       width = 8,
+       plot = grid.arrange(grobs = loop.qq(glm.longitudinal.sys, ignore = metabolites.subclass),
+                           ncol = 6),
+       height = 16,
+       width = 12,
        dpi = 300,
        unit = "in")
 ```
@@ -437,14 +600,14 @@ glm.meta.sys <- loop.rma(dset = dset$crosssectional,
                          response = "sys",
                          loops = metabolites,
                          covariates = ivars %difference% "cohort") %>%
-    loop.results(usemodelterm = TRUE) %>%
+    loop.results(idtoterm = TRUE) %>%
     mutate(response = "sys")
 
 glm.meta.dias <- loop.rma(dset = dset$crosssectional,
                          response = "dias",
                          loops = metabolites,
                          covariates = ivars %difference% "cohort") %>%
-    loop.results(usemodelterm = TRUE) %>%
+    loop.results(idtoterm = TRUE) %>%
     mutate(response = "dias")
 
 glm.meta <- rbind(glm.meta.sys, glm.meta.dias)
@@ -452,7 +615,7 @@ glm.meta <- rbind(glm.meta.sys, glm.meta.dias)
 
 <details><summary>Linear models</summary>
 
-```{r ggforestplot for linear meta-analysis models,  results = 'hide', echo = FALSE}
+```{r ggforestplot for linear meta-analysis models, echo = FALSE}
 myforestplot(glm.meta,
              xlim = c(-2, 3),
              dims = c(18, 23),
@@ -472,13 +635,13 @@ glm.longitudinal.meta.sys <- loop.rma(dset = getincidental(dset$longitudinal),
                                       response = "sys.followup",
                                       loops = metabolites,
                                       covariates = ivars %union% "sys" %difference% "cohort") %>%
-    loop.results(usemodelterm = TRUE) %>%
+    loop.results(idtoterm = TRUE) %>%
     mutate(response = "sys.followup")
 ```
 
 <details><summary>Linear models</summary>
 
-```{r ggforestplot for longitudinal models,  results = 'hide', echo = FALSE}
+```{r ggforestplot for longitudinal models, echo = FALSE}
 myforestplot(glm.longitudinal.meta.sys,
              xlim = c(-2, 3),
              dims = c(18, 23),
@@ -496,7 +659,7 @@ myforestplot(glm.longitudinal.meta.sys,
 <details><summary>Metabolite names</summary>
 
 ```{r metabolite names, echo = FALSE}
-lapply(c2l(metabolites), function(x)
+table.metabolites <- lapply(c2l(metabolites), function(x)
     data_frame(abbreviation = bioproperty(x),
                description = bioproperty(x, "description"),
                group = bioproperty(x, "group"),
@@ -506,7 +669,12 @@ lapply(c2l(metabolites), function(x)
                unit = bioproperty(x, "unit"))) %>%
     purrr::map_df(., ~as.data.frame(.x)) %>%
     mutate_at(vars(mean, sd), round, 3) %>%
-    arrange(abbreviation) %>%
+    arrange(abbreviation) 
+```
+
+```{r Metabolites names }
+table.metabolites %>%
+    filter(group != "Lipoprotein subclasses") %>%
     mykable
 ```
 

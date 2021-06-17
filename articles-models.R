@@ -25,7 +25,7 @@ tidywithresponse <- function(model) {
 
 myformula <- function(response, term, covariates, interaction, mixed) {
     terms <- term %union% covariates %>%
-        { if(response %in% c("htn", "sexfemale", "sexmale", "old", "young")) . %difference% "bptreat" else . }
+        { if(response %in% c("htn", "htn.female", "htn.male", "htn.old", "htn.young")) . %difference% "bptreat" else . }
     if (!missing(interaction)) {
         terms <- terms %union% paste0(term, ":", interaction)
     }
@@ -38,9 +38,9 @@ myformula <- function(response, term, covariates, interaction, mixed) {
     sprintf("%s ~ %s", response, paste(terms, collapse = " + "))
 }
 
-loop.results <- function(..., filterstr = "NMR_", usemodelterm = FALSE) {
-    purrr::map_df(c(...), ~as.data.frame(tidywithresponse(.x)), .id = "model") %>%
-        { if (usemodelterm) dplyr::mutate(., term = model) else . } %>%
+loop.results <- function(..., filterstr = "NMR_", idtoterm = FALSE) {
+    purrr::map_df(c(...), tidywithresponse, .id = "model") %>%
+        { if (idtoterm) dplyr::mutate(., term = model) else . } %>%
         dplyr::select(-model) %>%
         dplyr::filter(grepl(filterstr, term)) %>%
         dplyr::mutate(conf.low = estimate - qnorm(0.975) * std.error,
@@ -60,11 +60,10 @@ loop.lmer <- function(dset,
                       covariates = c()) {
     models <- parallel::mclapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates, mixed = mixed)
-        message(fo)
         ret <- lmerTest::lmer(formula = formula(fo), data = dset)
         ret@call <- str2lang(sprintf("lmerModLmerTest(%s)", fo))
         ret
-    }, mc.cores = min(length(loops), 8))
+    }, mc.cores = 1)
 }
 
 loop.binomialmixed <- function(dset,
@@ -74,30 +73,12 @@ loop.binomialmixed <- function(dset,
                     covariates = c()) {
     parallel::mclapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates, mixed = mixed)
-        message(fo)
         ret <- lme4::glmer(formula = as.formula(fo),
                            family = binomial(link = "logit"),
                            data = dset)
         ret@call <- str2lang(sprintf("lme4::glmer(%s)", fo))
         ret
-    }, mc.cores = min(length(loops), 8))
-}
-
-loop.mmgamma <- function(dset,
-                    response,
-                    loops,
-                    mixed = c("sampleid"),
-                    covariates = c()) {
-    parallel::mclapply(c2l(loops), function(loop) {
-        fo <- myformula(response, loop, covariates, mixed = mixed)
-        message(fo)
-        ret <- lme4::glmer(formula = as.formula(fo),
-#                           family = inverse.gaussian(link = "identity"),
-                           family = Gamma(link = "log"),
-                           data = dset)
-        ret@call <- str2lang(sprintf("lme4::glmer(%s)", fo))
-        ret
-    }, mc.cores = min(length(loops), 8))
+    }, mc.cores = 1)
 }
 
 ## COX
@@ -110,7 +91,7 @@ loop.cox <- function(dset,
         fo <- myformula(response, loop, covariates)
         ret <- coxph(formula = as.formula(fo), ties = "breslow", data = dset)
         ret$call <- as.formula(fo)
-    }, mc.cores = min(length(loops), 4))
+    }, mc.cores = 1)
 }
 
 ## Linear and logistic models
@@ -124,7 +105,7 @@ loop.lm <- function(dset,
         ret <- stats::lm(formula = as.formula(fo), data = dset, na.action = na.omit)
         ret$call <- as.formula(fo)
         ret
-    }, mc.cores = min(length(loops), 4))
+    }, mc.cores = 1)
 }
 
 loop.rma <- function(dset,
@@ -160,7 +141,7 @@ loop.gamma <- function(dset,
                           data = dset)
         ret$call <- as.formula(fo)
         ret
-    }, mc.cores = min(length(loops), 4))
+    }, mc.cores = 1)
 }
 
 loop.binomial <- function(dset,
@@ -170,7 +151,6 @@ loop.binomial <- function(dset,
     stopifnot(!missing(dset), !missing(response), !missing(loops))
     lapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates)
-        message(fo)
         ret <- stats::glm(formula = as.formula(fo),
                           family=binomial(link='logit'),
                           data = dset,
@@ -188,12 +168,13 @@ check.proportionality <- function(ordered, multinomial, loops) {
         ord_dev <- ordered[[loop]]$deviance
         mul_dev <- multinomial[[loop]]$deviance
         pchisq(abs(ord_dev - mul_dev), abs(ord_dof - mul_dof), lower.tail = FALSE)
-    }, mc.cores = min(length(loops), 8)) %>%
+    }, mc.cores = 1) %>%
         purrr::map_df(., ~data.frame("p.value" = .x), .id = "model")
 }
 
-loop.residuals <- function(...) {
-    lapply(c(...), function(model) {
+loop.residuals <- function(..., ignore = c()) {
+    models <- c(...)
+    lapply(models[names(models) %difference% ignore], function(model) {
         term <- ifelse(isS4(model),
                        all.vars(model@call)[2],
                        all.vars(model$call)[2])
@@ -208,8 +189,9 @@ loop.residuals <- function(...) {
     })
 }
 
-loop.qq <- function(...) {
-    lapply(c(...), function(model) {
+loop.qq <- function(..., ignore = c()) {
+    models <- c(...)
+    lapply(models[names(models) %difference% ignore], function(model) {
         term <- ifelse(isS4(model),
                        all.vars(model@call)[2],
                        all.vars(model$call)[2])
@@ -225,12 +207,18 @@ loop.qq <- function(...) {
 }
 
 
-results.table <- function(df, exponentiate = c("htn", "htn3", "htn.followup"), percent = FALSE, drop = FALSE) {
+results.table <- function(df,
+                          exponentiate = c("htn", "htn3", "htn.followup"),
+                          percent = FALSE,
+                          drop = FALSE,
+                          nosubclass = TRUE) {
     dplyr::mutate(df,
+                  group = bioproperty(term, "group"),
                   term = bioproperty(term),
                   estimate = ifelse(response %in% exponentiate, exp(estimate), estimate),
                   conf.low = ifelse(response %in% exponentiate, exp(conf.low), conf.low),
                   conf.high = ifelse(response %in% exponentiate, exp(conf.high), conf.high)) %>%
+        { if (nosubclass) dplyr::filter(., group != "Lipoprotein subclasses") else . } %>%
         betacip(percent = percent) %>%
         myspread() %>%
         { if (drop) filter_at(., vars(contains("p.value")), any_vars(. < 0.05)) else .}
@@ -293,11 +281,13 @@ myglm <- function(vars, df, response = "htn.followup") {
     glm(as.formula(fo), family = "binomial", data = df, x=TRUE)
 }
 
-spearmancorrelation  <- function(dset, vars) {
-  dat <- dset %>% dplyr::select(vars)
-  colnames(dat) <- colnames(dat) %>% bioproperty()
-  cor <- cor(dat, method = 'spearman')
+correlationmatrix  <- function(dset, vars, method = "spearman", adjust = "fdr") {
+    dat <- dset %>% dplyr::select(one_of(vars[["id"]])) %>% na.omit()
+    colnames(dat) <- vars[["group_name"]]
+    psych::corr.test(as.matrix(dat), method = method, adjust = adjust)
 }
+
+
 
 mynri <- function(std, new, cut = 0, niter = 100, alpha = 0.05) {
     invisible(capture.output(ret <- nribin(mdl.std = std,
