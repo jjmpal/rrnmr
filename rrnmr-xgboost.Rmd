@@ -1,0 +1,602 @@
+---
+title: "NMR metabolites and hypertension: XGBoost"
+author: "Joonatan Palmu"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+output: 
+  html_document:
+    number_sections: true
+---
+
+```{r options, include=FALSE}
+knitr::opts_chunk$set(include = TRUE,
+                      echo = TRUE,
+                      message = FALSE,
+                      results = 'asis',
+                      cache = FALSE,
+                      warning=FALSE,
+                      error = FALSE)
+options(error = traceback, knitr.kable.NA = "")
+```
+
+[Guide](https://michael-barr.com/datasci/bayesian-mbo)
+[Fatty liver manuscript](https://academic.oup.com/eurheartj/article/41/44/4259/5899897#supplementary-data)
+[Fatty liver source code](https://www.informahealthcare.com/doi/suppl/10.1080/19490976.2021.1888673/suppl_file/kgmi_a_1888673_sm1172.zip)
+
+# Libraries
+
+<details><summary>Libaries</summary>
+
+```{r libraries, results = 'hide'}
+library(magrittr)
+library(knitr)
+library(tidyr)
+library(broom)
+library(purrr)
+library(dplyr)
+library(xgboost)
+library(caret)
+library(mlr)
+library(mlrMBO)
+library(ggplot2)
+library(vip)
+library(parallel)
+library(ggthemes)
+library(ggrepel)
+library(scales)
+library(cowplot)
+library(gridExtra)
+library(optparse)
+```
+
+```{r set theme, include = FALSE}
+theme_set(theme_tufte(base_family = "sans", base_size = 18) +
+               theme(panel.border = element_rect(colour = "black", fill = NA),
+                     axis.text = element_text(colour = "black", size = 18),
+                     aspect.ratio = 1))
+```
+
+```{r commandline arguments, echo = FALSE}
+options <- list(
+    optparse::make_option(c("-n", "--no-clinical"),
+                          action="store_true",
+                          default = FALSE,
+                          help="Exclude clinical covariates"),
+    optparse::make_option(c("-m", "--no-metabolites"),
+                          action="store_true",
+                          default = FALSE,
+                          help="Exclude metabolites covariates")
+)
+
+arguments <- parse_args(OptionParser(option_list = options))
+
+exclude_vars <-  arguments[["no-clinical"]]
+exclude_metabolites <-  arguments[["no-metabolites"]]
+
+message("Args ", exclude_vars, " and ", exclude_metabolites)
+```
+
+
+</details>
+
+## Functions
+
+<details><summary>Helper functions</summary>
+
+```{r, code = readLines("articles-xgfunctions.R")}
+source("articles-xgfunctions.R")
+```
+
+</details>
+
+<details><summary>XGBoost functions</summary>
+
+```{r, code = readLines("articles-xgboost.R")}
+source("articles-xgboost.R")
+```
+
+</details>
+
+<details><summary>Function factory</summary>
+
+```{r saver}
+datetime <- format(Sys.time(), "%Y%m%d_%H%M%S")
+mysave <- mysavefactory(arguments)
+myload <- myloadfactory(arguments)
+myggsave <- myggsavefactory(datetime)
+datetime
+```
+
+</details>
+
+#  Folder structure
+
+```{r clean folders}
+mkdir("cache", "report", "session")
+```
+
+# Data import
+
+## Main data import
+
+```{r import data}
+dset <- readRDS("rds/dset-20210217-102531.rds")
+```
+
+## Covariates
+
+Clinical covariates
+
+```{r clinical variables, eval = !exclude_vars, echo = !exclude_vars}
+ivars <- c("age", "female", "bmi", "smoker", "diabetes", "leisure", "bptreat", "koltreat")
+ivars_longitudinal <- c("age", "female", "bmi", "smoker", "diabetes", "leisure", "bptreat", "koltreat", "sys_old")
+```
+
+```{r no clinical variables, eval = exclude_vars, echo = exclude_vars}
+ivars <- c()
+ivars_longitudinal <- c()
+```
+
+```{r metabolites, eval = !exclude_metabolites, echo = !exclude_metabolites}
+metabolites.all <- getmetabolites(dset$crosssectional)
+metabolites.subclass <- getsubclasses(metabolites.all)
+metabolites <- metabolites.all %difference% metabolites.subclass
+```
+
+
+```{r no metabolic measures, eval = exclude_metabolites, echo = exclude_metabolites}
+metabolites <- c()
+```
+
+## Data filtering
+
+
+```{r modify dset for xgboost}
+dset_all <- dset$crosssectional %>%
+    mutate(fold = case_when(
+               cohort == "1997" ~ 1,
+               cohort == "T2000" ~ 2,
+               cohort == "2002" ~ 3,
+               cohort == "2007" ~ 4,
+               cohort == "2012" ~ 5,
+               cohort == "2017" ~ 6)) %>%
+    mutate_at(ivars, as.numeric) %>%
+    select(one_of(ivars), sys, one_of(metabolites), fold)
+
+dset_longitudinal_all <- dset[["longitudinal"]] %>%
+    get_longitudinal_dset %>%
+    mutate_at(ivars_longitudinal, as.numeric) %>%
+    select(one_of(ivars_longitudinal), cohort, sys, one_of(metabolites))
+```
+
+
+
+## Discovery and test sets
+
+```{r splitting data}
+dset_discovery <- filter(dset_all, fold %in% c(1, 2, 3, 4, 5))
+dset_test <- filter(dset_all, fold == 6) 
+```
+
+Discovery dataset dimensions are `r dim(dset_discovery)` and test dataset dimensions are `r dim(dset_test)`.
+
+```{r dset longitudinal}
+dset_longitudinal_discovery <- dset_longitudinal_all %>% filter(cohort == "T2000") %>% select(-cohort) 
+dset_longitudinal_test <- dset_longitudinal_all %>% filter(cohort == "F2007") %>% select(-cohort)
+```
+
+Longitudinal discovery dataset dimension are `r dim(dset_longitudinal_discovery)` and test dataset dimensions are
+`r dim (dset_longitudinal_test)`
+
+# XGBoost parameter optimization
+
+```{r Bayesian optimization restore}
+bayes_run <- myload("bayes_run")
+longitudinal_bayes_run <- myload("longitudinal_bayes_run")
+```
+
+
+Defining basic xgboost-model parameters.
+
+```{r basic parameters}
+basic_xgboost_params <-  list( booster = "gbtree",
+                              objective ="reg:squarederror",
+                              eval_metric = "rmse")
+```
+
+Define model parameters ranges for cross-validation
+
+```{r parameter set}
+my_single_objective_params <- makeParamSet(
+    makeIntegerParam("nrounds", lower = 50, upper = 5000),
+    makeNumericParam("eta", lower = 0.001, upper = 0.1),
+    makeNumericParam("gamma", lower = 0.1, upper = 100),
+    makeIntegerParam("max_depth", lower= 2, upper = 10),
+    makeIntegerParam("min_child_weight", lower= 1, upper = 200),
+    makeNumericParam("subsample", lower = 0.2, upper = 0.8),
+    makeNumericParam("colsample_bytree", lower = 0.2, upper = 0.8),
+    makeIntegerParam("fold", lower = 1, upper = 5, tunable = FALSE))
+```
+
+```{r longitudinal parameter set}
+my_longitudinal_single_objective_params <- makeParamSet(
+    makeIntegerParam("nrounds", lower = 50, upper = 5000),
+    makeNumericParam("eta", lower = 0.001, upper = 0.1),
+    makeNumericParam("gamma", lower = 0.1, upper = 100),
+    makeIntegerParam("max_depth", lower= 2, upper = 5),
+    makeIntegerParam("min_child_weight", lower= 1, upper = 200),
+    makeNumericParam("subsample", lower = 0.2, upper = 0.8),
+    makeNumericParam("colsample_bytree", lower = 0.2, upper = 0.8))
+```
+
+
+Find optimal set of model parameters
+	
+```{r optimize parameters}
+smoof_func <- smoof::makeSingleObjectiveFunction(
+                         name = "xgb_cv_bayes",
+                         fn =   function(x) my_leaveoneout_crossvalidation(x,
+                                                                                               params = basic_xgboost_params,
+                                                                                               dset = dset_discovery),
+                         par.set = my_single_objective_params,
+                         minimize = TRUE)
+```
+
+```{r longitudinal optimize parameters}
+longitudinal_smoof_func <- smoof::makeSingleObjectiveFunction(
+                                      name = "xgb_cv_bayes_longitudinal",
+                                      fn =   function(x) my_n_fold_crossvalidation(x,
+                                                                                                     params = basic_xgboost_params,
+                                                                                                     dset = dset_longitudinal_discovery,
+                                                                                                     nfolds = 5),
+                                      par.set = my_longitudinal_single_objective_params,
+                                      minimize = TRUE)
+```
+
+
+Run cross-validation between distinct cohorts: FR1997, FR2002 FR2007, FR2012,  FH2017, and H2000.
+
+```{r extra params}
+n_design <-  6*(get_nparameters(my_single_objective_params) - 1)
+n_opt_steps <- 100
+```
+
+<details><summary>Optimization run</summary>
+
+```{r Bayesian optimization, eval = is_null(bayes_run)}
+bayes_run <- do_bayes(n_design = n_design,
+                      of = smoof_func,
+                      opt_steps = n_opt_steps)
+mysave(bayes_run, name = "bayes_run")
+```
+
+```{r longitudinal Bayesian optimization, eval = is_null(longitudinal_bayes_run)}
+longitudinal_bayes_run <- do_bayes(n_design = n_design,
+                                   of = longitudinal_smoof_func,
+                                   opt_steps = n_opt_steps)
+mysave(longitudinal_bayes_run, name = "longitudinal_bayes_run")
+```
+
+
+</details>
+
+<details><summary>Diagnostic plots</summary>
+
+```{r optimization graph, fig.width=10, fig.height=4, fig.fullwidth=TRUE}
+bayes_run$opt.path$env$path %>%
+    mutate(Round = row_number()) %>%
+    mutate(type = ifelse(Round <= n_design, "Design", "mlrMBO optimization")) %>%
+    ggplot(aes(x= Round, y= y, color= type)) + 
+    geom_point(size = 1) +
+    scale_x_continuous(expand = c(0, 0), name = "Round") +
+    scale_y_continuous(expand = c(0, 0), name = "-log(likelihood)", limit = c(0, 100)) +
+    labs(title = "mlrMBO optimization") +
+    theme_classic()
+```
+
+```{r longitudinal optimization graph, fig.width=10, fig.height=4, fig.fullwidth=TRUE}
+longitudinal_bayes_run$opt.path$env$path %>%
+    mutate(Round = row_number()) %>%
+    mutate(type = ifelse(Round <= n_design, "Design", "mlrMBO optimization")) %>%
+    ggplot(aes(x= Round, y= y, color= type)) + 
+    geom_point(size = 1) +
+    scale_x_continuous(expand = c(0, 0), name = "Round") +
+    scale_y_continuous(expand = c(0, 0), name = "-log(likelihood)", limit = c(0, 100)) +
+    labs(title = "mlrMBO optimization") +
+    theme_classic()
+```
+
+
+```{r basic graphs, fig.width=10, fig.height=10, fig.fullwidth=TRUE}
+plot(bayes_run)
+```
+
+```{r basic longitudinal graphs, fig.width=10, fig.height=10, fig.fullwidth=TRUE}
+plot(longitudinal_bayes_run)
+```
+
+
+</details>
+
+## Optimal xgboost models
+
+Define optimal params for xgboost
+
+```{r best cv model}
+( my_optimal_params <- modifyList(basic_xgboost_params, bayes_run[["x"]])) %>%
+    map_df(~.x) %>%
+    kable
+```
+
+```{r best longitudinal cv model}
+( my_optimal_longitudinal_params <- modifyList(basic_xgboost_params, longitudinal_bayes_run[["x"]])) %>%
+    map_df(~.x) %>%
+    kable
+```
+
+```{r run xgboost with optimal params}
+set.seed(42)
+my_optimal_model <- my_optimal_xboost(params = my_optimal_params %>%
+                                          purrr::list_modify(nrounds = NULL, fold = NULL),
+                                      dset = dset_discovery,
+                                      nrounds = my_optimal_params[["nrounds"]])
+```
+
+```{r run longitudinal xgboost with optimal params}
+set.seed(42)
+my_optimal_longitudinal_model <- my_optimal_xboost(params = my_optimal_longitudinal_params %>%
+                                                       purrr::list_modify(nrounds = NULL, fold = NULL),
+                                      dset = dset_longitudinal_discovery,
+                                      nrounds = my_optimal_longitudinal_params[["nrounds"]])
+```
+
+## Feature importance
+
+
+<details><summary>Numerical cross-sectional values</summary>
+
+```{r importance table}
+xgb.importance(model = my_optimal_model) %>% kable
+```
+
+</details>
+
+<details><summary>Numerical longitudinal values</summary>
+
+```{r longitudinal importance table}
+xgb.importance(model = my_optimal_longitudinal_model) %>% kable
+```
+
+</details>
+
+
+## Prediction
+
+### Cross-sectional
+
+#### Training set
+
+```{r training prediciton}
+list(xsectional_training = summarize_run(dset_discovery, my_optimal_model),
+     xsectional_test = summarize_run(dset_test, my_optimal_model),
+     longitudinal_training = summarize_run(dset_longitudinal_discovery, my_optimal_longitudinal_model),
+     longitudinal_test = summarize_run(dset_longitudinal_test, my_optimal_longitudinal_model)) %>%
+    map_df(identity, .id = "model") %>%
+    kable()
+```
+
+<details><summary>Prediction plots</summary>
+
+```{r training prediction plot, fig.width=10, fig.height=4, fig.fullwidth=TRUE}
+summarize_run(dset_discovery, my_optimal_model, plot = TRUE)
+```
+
+```{r testing prediction plot, fig.width=10, fig.height=4, fig.fullwidth=TRUE}
+summarize_run(dset_test, my_optimal_model, plot = TRUE)
+```
+
+```{r longitudinal training prediction plot, fig.width=10, fig.height=4, fig.fullwidth=TRUE}
+summarize_run(dset_longitudinal_discovery, my_optimal_longitudinal_model, plot = TRUE)
+```
+```
+
+```{r longitudinal testing prediction plot, fig.width=10, fig.height=4, fig.fullwidth=TRUE}
+summarize_run(dset_longitudinal_test, my_optimal_longitudinal_model, plot = TRUE)
+```
+
+</details>
+
+
+## Define variable names
+
+```{r vip colnames}
+new_colnames <- human_readable_names(dset_discovery %>% select(-sys, -fold), length = 12) %>% tibble::deframe()
+```
+
+## Variable importance in projection
+
+```{r max vip}
+xgboost_max_gain <- get_xgb_top_gain(my_optimal_model, my_optimal_longitudinal_model) %>%
+    round_up_decimal
+```
+
+### Cross-sectional
+
+```{r vip plot}
+g_vip <- vip(my_optimal_model, num_features = 15) + 
+    scale_x_discrete(labels= new_colnames, expand = c(0, 0)) +
+    scale_y_continuous(limit = c(0, xgboost_max_gain))  +
+    theme_classic() +
+    theme(text = element_text(size=20))
+
+myggsave(file = "cache/vip.png",
+       plot = g_vip,
+       width = 6,
+       height = 3,
+       dpi = 300,
+       unit = "in")
+```
+
+### Longitudinal
+
+```{r vip colnames longitudinal}
+new_longitudinal_colnames <- human_readable_names(dset_longitudinal_discovery %>% select(-sys)) %>% tibble::deframe()
+```
+
+```{r vip plot longitudinal}
+g_vip_longitudinal <- vip(my_optimal_longitudinal_model, num_features = 15) + 
+    scale_x_discrete(labels= new_longitudinal_colnames) +
+    scale_y_continuous(limit = c(0, xgboost_max_gain))  +
+    theme_classic() +
+    theme(text = element_text(size=20))
+
+myggsave(file = "cache/vip_longitudinal.png",
+       plot = g_vip_longitudinal,
+       width = 20,
+       height = 10,
+       dpi = 300,
+       unit = "in") 
+```
+
+## Partial dependency
+
+### Important measures
+
+```{r get most important NMR features}
+important_crosssectional_measures <- xgb.importance(model = my_optimal_model) %>%
+    arrange(-Gain) %>%
+    filter(grepl("^NMR_", Feature)) %>%
+    head(n = 9) %>%
+    pull(Feature)
+```
+
+```{r get most important longitudinal NMR features}
+important_longitudinal_measures <- xgb.importance(model = my_optimal_longitudinal_model) %>%
+    arrange(-Gain) %>%
+    filter(grepl("^NMR_", Feature)) %>%
+    head(n = 9) %>%
+    pull(Feature)
+```
+
+### Cross-sectional
+
+```{r cross-sectional pdp matrix}
+matrix_pdp <- dset_discovery %>% select(-any_of(c("sys", "fold"))) %>% data.matrix
+```
+
+```{r partial dependency}
+df_pdp <- c2l(important_crosssectional_measures) %>%
+    map(~ pdp::partial(my_optimal_model,
+                       pred.var = .x,
+                       pred.grid = crossing(!!quo_name(.x) := seq(-2, 2, 0.1)),
+                       train = matrix_pdp,
+                       ice = FALSE,
+                       type = "regression",
+                       plot = FALSE) %>% 
+            as_tibble %>%
+          rename(y = yhat, x := !!quo_name(.x))) %>%
+    map_df(~.x, .id = "feature")
+```
+
+
+### Longitudinal
+
+```{r longitudinal pdp matrix}
+matrix_longitudinal_pdp <- dset_longitudinal_discovery %>% select(-any_of(c("sys", "fold"))) %>% data.matrix
+```
+
+```{r partial dependency longitudinal}
+df_pdp_longitudinal <- c2l(important_longitudinal_measures) %>%
+    map(~ pdp::partial(my_optimal_longitudinal_model,
+                       pred.var = .x,
+                       pred.grid = crossing(!!quo_name(.x) := seq(-2, 2, 0.1)),
+                       train = matrix_longitudinal_pdp,
+                       type = "regression",
+                       ice = FALSE,
+                       plot = FALSE)  %>% 
+            as_tibble %>%
+          rename(y = yhat, x := !!quo_name(.x))) %>%
+    map_df(~.x, .id = "feature")
+```
+
+### Prepare ggplot graphs
+
+```{r plot cross-sectional pd, echo = FALSE, eval = !exclude_metabolites}
+g_pdp <- df_pdp %>%
+    mutate(desc = new_colnames[feature]) %>%
+    ggplot(aes(x = x, y = y)) +
+    facet_wrap(~desc, labeller = label_wrap_gen(width = 14)) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(-2,2,1),
+                       limits = c(-2, 2)) +
+    scale_y_continuous(breaks = seq(110, 180, 2)) +
+    xlab("1-SD change in metabolic measure") +
+    ylab("Systolic BP") +
+    theme(strip.text = element_text(size = 14),
+          axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+          axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
+
+myggsave(file = "cache/pdp.png",
+           plot = g_pdp, 
+           width = 9,
+           height = 8,
+           dpi = 300,
+        unit = "in")
+```
+
+
+```{r plot longitudinal pd, echo = FALSE, eval = !exclude_metabolites}
+g_pdp_longitudinal <-  df_pdp_longitudinal %>%
+    mutate(desc = new_colnames[feature]) %>%
+    ggplot(aes(x = x, y = y)) +
+    facet_wrap(~desc, labeller = label_wrap_gen(width = 24)) +
+    geom_line() +
+    scale_x_continuous(breaks = seq(-2,2,1),
+                       limits = c(-2, 2)) +
+    scale_y_continuous(breaks = seq(110, 180, 1)) +
+    xlab("1-SD change in metabolic measure") +
+    ylab("Follow-up systolic BP")  +
+    theme(strip.text = element_text(size = 14),
+          axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+          axis.title.x = element_text(margin = margin(t = 20, r = 0, b = 0, l = 0)))
+
+myggsave(file = "cache/pdp_longitudinal.png",
+           plot = g_pdp_longitudinal , 
+           width = 10,
+           height = 8,
+           dpi = 300,
+        unit = "in")
+```
+
+## Generate images
+
+```{r join pdp images, eval = !exclude_metabolites}
+list(g_pdp, g_pdp_longitudinal) %>%
+    map(fix_ggplot_labels) %>%
+    plot_grid(plotlist = .,
+              labels = "AUTO",
+              label_fontfamily = "sans",
+              label_fontface = "plain",
+              label_size = 30) %>%
+    myggsave(file = "cache/pdp_all.png",
+             plot = .,
+             width = 14,
+             height = 8,
+             dpi = 300,
+             unit = "in")
+```
+
+```{r join vip images}
+plot_grid(plotlist = normalize_plots(g_vip, g_vip_longitudinal),
+          ncol = 2,
+          labels = "AUTO",
+          label_fontfamily = "sans",
+          label_fontface = "plain",
+          label_size = 30) %>%
+    myggsave(file = "cache/vip_all.png",
+           plot = .,
+           width = 14,
+           height = 6,
+           dpi = 300,
+           unit = "in")
+```
+
